@@ -1,0 +1,40 @@
+.test-plan-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.test-plan-table {
+  width: 100%;
+  min-width: 1100px;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.test-plan-table th {
+  text-align: left;
+  padding: var(--space-3);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-bottom: 1px solid var(--border-color);
+  position: sticky;
+  top: 0;
+}
+
+.test-plan-table__expand-col {
+  width: 32px;
+}
+
+.test-plan-table__actions-col {
+  width: 150px;
+}
+
+.test-plan-table__empty {
+  padding: var(--space-6);
+  text-align: center;
+  color: var(--text-muted);
+}

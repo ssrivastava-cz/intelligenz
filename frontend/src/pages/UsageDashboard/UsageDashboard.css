@@ -1,0 +1,15 @@
+.usage-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.usage-dashboard__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-4);
+}
+
+.usage-dashboard__status {
+  color: var(--text-muted);
+}

@@ -1,0 +1,58 @@
+.feedback-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(35, 40, 25, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: var(--space-5);
+}
+
+.feedback-modal {
+  width: min(440px, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+  background: var(--bg-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-elevated);
+  padding: var(--space-5);
+}
+
+.feedback-modal__title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.feedback-modal__subtitle {
+  margin-top: var(--space-1);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.feedback-modal__section {
+  margin-top: var(--space-4);
+}
+
+.feedback-modal__section-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: var(--space-2);
+}
+
+.feedback-modal__issue-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.feedback-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}

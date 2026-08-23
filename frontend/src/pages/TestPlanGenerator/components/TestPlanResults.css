@@ -1,0 +1,9 @@
+.test-plan-results__add-row {
+  margin-top: var(--space-3);
+}
+
+.test-plan-results__feedback {
+  margin-top: var(--space-6);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+}

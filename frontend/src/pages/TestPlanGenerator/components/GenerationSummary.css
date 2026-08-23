@@ -1,0 +1,25 @@
+.generation-summary {
+  margin-bottom: var(--space-5);
+}
+
+.generation-summary__fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-4);
+  margin: 0;
+}
+
+.generation-summary__fields dt {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+  margin-bottom: var(--space-1);
+}
+
+.generation-summary__fields dd {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}

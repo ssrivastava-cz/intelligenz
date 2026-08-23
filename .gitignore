@@ -1,0 +1,93 @@
+# ============================================================
+# Secrets / environment variables
+# Real values live only in local .env files or a secrets manager —
+# never in git. .env.example files are templates and MUST be tracked.
+# ============================================================
+.env
+.env.*
+!.env.example
+!*/.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+*credentials*.json
+
+# ============================================================
+# Python (backend)
+# ============================================================
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ============================================================
+# Node / frontend build output
+# ============================================================
+node_modules/
+dist/
+dist-ssr/
+build/
+coverage/
+.vite/
+*.local
+
+# ============================================================
+# Backend runtime & generated data — rebuildable or private;
+# never the application's source code.
+#   data/          -> ChromaDB vector store, generation/index/upload
+#                      history, cached Redmine ticket data
+#   database/      -> Knowledge Assistant generation records
+#                      (real questions/answers asked against the app)
+#   source_of_truth/ -> ingested customer/product knowledge-base docs
+#   uploads/       -> user-uploaded documents for a session
+#   logs/          -> rotating application log files
+# ============================================================
+backend/data/
+backend/database/
+backend/source_of_truth/
+backend/uploads/
+backend/logs/
+mongodb_data/
+
+# Generic safety net in case similar runtime data ever appears
+# somewhere other than the known paths above.
+**/chroma/
+*.sqlite3
+*.sqlite3-journal
+*.db
+
+# ============================================================
+# Logs
+# ============================================================
+*.log
+npm-debug.log*
+
+# ============================================================
+# Editor / IDE / OS
+# ============================================================
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.lnk
+
+# Claude Code: settings.local.json is machine/session-specific
+# (local permission allowlist, absolute local paths) — never shared.
+.claude/settings.local.json
+
+# ============================================================
+# Temporary / scratch files
+# ============================================================
+*.tmp
+*.bak
+*.swp
+tmp/
+_tmp_*/

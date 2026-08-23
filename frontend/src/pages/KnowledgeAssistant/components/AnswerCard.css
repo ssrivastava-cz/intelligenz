@@ -1,0 +1,62 @@
+.answer-card__section {
+  margin-bottom: var(--space-4);
+}
+
+.answer-card__section-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: var(--space-2);
+}
+
+.answer-card__question {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.answer-card__answer {
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.answer-card__feedback {
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.answer-card__feedback-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.answer-card__feedback-prompt {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.answer-card__link {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  font-size: 0.86rem;
+  font-weight: 500;
+}
+
+.answer-card__link:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+.answer-card__thanks {
+  margin-top: var(--space-3);
+  font-size: 0.85rem;
+  color: var(--success);
+}

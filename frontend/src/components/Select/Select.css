@@ -1,0 +1,49 @@
+.select-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.select-field__label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.select-field__required {
+  color: var(--danger);
+  margin-left: 2px;
+}
+
+.select-field__wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.select-field__control {
+  width: 100%;
+  appearance: none;
+  padding: 10px 36px 10px var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 0.88rem;
+}
+
+.select-field__control:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.select-field__control:invalid {
+  color: var(--text-muted);
+}
+
+.select-field__chevron {
+  position: absolute;
+  right: 10px;
+  color: var(--text-muted);
+  pointer-events: none;
+}

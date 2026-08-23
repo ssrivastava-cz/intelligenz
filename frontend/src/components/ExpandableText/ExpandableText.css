@@ -1,0 +1,36 @@
+.expandable-text {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  padding: var(--space-3);
+}
+
+.expandable-text__content {
+  margin: 0 0 var(--space-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.expandable-text__content--clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.expandable-text__toggle {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.expandable-text__toggle:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
