@@ -1,6 +1,8 @@
 from pathlib import Path
+from typing import Any, Iterable
 
 _MAX_HEADING_LENGTH = 80
+_MAX_ACRONYM_LENGTH = 5
 
 
 def title_from_filename(filename: str) -> str:
@@ -44,4 +46,53 @@ def _is_title_case(line: str) -> bool:
     words = [word for word in line.split() if word[0].isalpha()]
     if len(words) < 2:
         return False
-    return all(word[0].isupper() for word in words)
+    return all(_looks_like_title_word(word) for word in words)
+
+
+def _looks_like_title_word(word: str) -> bool:
+    """True for a word that plausibly belongs in a natural-language
+    heading — ordinary Title Case ("Patient", "Creation") or a short,
+    purely-alphabetic ALL-CAPS acronym ("ID", "API"). False for an
+    alphanumeric code or identifier ("P10001", "PLAN-A") that merely
+    happens to start with an uppercase letter.
+
+    The previous version of this check only looked at a word's first
+    character (`word[0].isupper()`), so a data value like "P10001" or
+    "PLAN-A" — uppercase first letter, arbitrary digits/punctuation
+    after it — passed as if it were a real Title Case word, causing
+    lines like "Patient ID P10001" or "Plan ID PLAN-A" to be
+    misclassified as section headings (confirmed against the real
+    Source of Truth PDFs, which contain exactly this pattern).
+    """
+    if any(character.isdigit() for character in word):
+        return False
+    if word.isalpha() and word.isupper():
+        return len(word) <= _MAX_ACRONYM_LENGTH
+    return word[0].isupper() and word[1:].islower()
+
+
+def is_blank_value(value: Any) -> bool:
+    """Whether a single cell/field value carries no meaningful content.
+
+    `None` and an empty/whitespace-only string are blank. `0`, `0.0`,
+    and `False` are never blank — they're meaningful values that merely
+    happen to be falsy, not the absence of one. Anything else is
+    stringified and checked for whitespace-only content, so a value
+    that arrives as a non-string (e.g. already-parsed numeric/boolean
+    types from a source other than `csv.DictReader`, which always
+    yields `str | None`) is still handled safely.
+    """
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return False
+    return str(value).strip() == ""
+
+
+def is_blank_row(values: Iterable[Any]) -> bool:
+    """Whether every value in a row carries no meaningful content — see
+    `is_blank_value`. An empty row (no values at all) counts as blank.
+    """
+    return all(is_blank_value(value) for value in values)

@@ -8,6 +8,8 @@ import tiktoken
 from chromadb.config import Settings as ChromaSettings
 
 from app.core.exceptions import ExternalServiceError, NotFoundError
+from app.retrievers.text_tokenizer import TOKENIZER_VERSION, tokenize
+from app.services.bm25_index_manager import BM25IndexManager
 from app.services.chunking_engine import ChunkingEngine
 from app.services.embedding_service import EmbeddingService
 from app.services.history_service import HistoryService
@@ -56,6 +58,13 @@ def _make_service(
     vector_store = VectorStoreService(client=chroma_client, collection_name=collection_name)
 
     history_service = HistoryService(history_root=tmp_path / "history")
+    bm25_index_manager = BM25IndexManager(
+        index_dir=tmp_path / "bm25",
+        collection_name=collection_name,
+        tokenizer=tokenize,
+        tokenizer_version=TOKENIZER_VERSION,
+        chunking_signature="chunk_size=500,chunk_overlap=50",
+    )
 
     service = IndexService(
         indexer=indexer,
@@ -63,6 +72,7 @@ def _make_service(
         embedding_service=embedding_service,
         vector_store=vector_store,
         history_service=history_service,
+        bm25_index_manager=bm25_index_manager,
         embedding_model=_EMBEDDING_MODEL,
         price_per_1k_tokens=price_per_1k_tokens,
     )
@@ -185,6 +195,166 @@ def test_index_feature_reindexing_replaces_rather_than_accumulates(tmp_path):
     assert len(stored["ids"]) == second_entry.chunks_indexed
 
 
+# --- index_all_features (POST /index-source-of-truth) -------------------------
+
+
+def test_index_all_features_indexes_every_discovered_feature(tmp_path):
+    _write(tmp_path, "Appointments", "workflows", "a.md", "# Onboarding\n\nSteps here that are long enough.")
+    _write(tmp_path, "Coding Tool", "TestCases", "c.csv", "id,title\n1,Book an appointment\n")
+    service, vector_store, _ = _make_service(tmp_path)
+
+    summary = service.index_all_features()
+
+    assert summary.total_features == 2
+    assert summary.successful_features == 2
+    assert summary.failed_features == 0
+    # discovered in sorted order, one result per feature
+    assert [result.feature for result in summary.features] == ["Appointments", "Coding Tool"]
+    assert all(result.status == "SUCCESS" and result.error is None for result in summary.features)
+    assert summary.total_documents_indexed == 2
+    assert summary.total_chunks_indexed == sum(r.chunks_indexed for r in summary.features) >= 2
+    assert summary.total_embedding_tokens == sum(r.embedding_tokens for r in summary.features) > 0
+
+    # both features landed in ChromaDB and the persistent BM25 index
+    stored = vector_store._collection.get(include=["metadatas"])
+    assert {m["feature"] for m in stored["metadatas"]} == {"Appointments", "Coding Tool"}
+    bm25_corpus = json.loads((tmp_path / "bm25" / "corpus.json").read_text(encoding="utf-8"))
+    assert {r["feature"] for bucket in bm25_corpus.values() for r in bucket} == {"Appointments", "Coding Tool"}
+
+    # history written once per feature, via the same path as index_feature
+    assert [entry.feature for entry in service.list_history()] == ["Appointments", "Coding Tool"]
+
+
+def test_index_all_features_runs_index_feature_once_per_feature_sequentially(tmp_path, monkeypatch):
+    _write(tmp_path, "Appointments", "workflows", "a.md", "# Onboarding\n\nBody content long enough to chunk.")
+    _write(tmp_path, "Coding Tool", "workflows", "b.md", "# Roles\n\nMore body content, also long enough.")
+    service, _, _ = _make_service(tmp_path)
+
+    calls: list[str] = []
+    original = service.index_feature
+
+    def spy(feature: str):
+        calls.append(feature)
+        return original(feature)
+
+    monkeypatch.setattr(service, "index_feature", spy)
+
+    service.index_all_features()
+
+    assert calls == ["Appointments", "Coding Tool"]  # one call per feature, in sorted order
+
+
+def test_index_all_features_reports_a_failed_feature_and_continues(tmp_path):
+    _write(tmp_path, "Appointments", "workflows", "a.md", "# Onboarding\n\nBody content long enough to chunk.")
+    _write(tmp_path, "Broken", "workflows", "bad.pdf", "this is not a real pdf")
+    _write(tmp_path, "Coding Tool", "workflows", "c.md", "# Roles\n\nMore body content, also long enough.")
+    service, vector_store, _ = _make_service(tmp_path)
+
+    summary = service.index_all_features()
+
+    by_feature = {result.feature: result for result in summary.features}
+    assert summary.total_features == 3
+    assert summary.successful_features == 2
+    assert summary.failed_features == 1
+    assert by_feature["Broken"].status == "FAILED"
+    assert by_feature["Broken"].error and "PDF" in by_feature["Broken"].error
+    assert by_feature["Broken"].chunks_indexed == 0
+    assert by_feature["Appointments"].status == "SUCCESS"
+    assert by_feature["Coding Tool"].status == "SUCCESS"
+
+    # only the two good features reached ChromaDB, BM25, and history
+    stored = vector_store._collection.get(include=["metadatas"])
+    assert {m["feature"] for m in stored["metadatas"]} == {"Appointments", "Coding Tool"}
+    assert {entry.feature for entry in service.list_history()} == {"Appointments", "Coding Tool"}
+    bm25_corpus = json.loads((tmp_path / "bm25" / "corpus.json").read_text(encoding="utf-8"))
+    assert {r["feature"] for bucket in bm25_corpus.values() for r in bucket} == {"Appointments", "Coding Tool"}
+
+
+def test_index_all_features_with_no_features_returns_an_empty_summary(tmp_path):
+    (tmp_path / "source_of_truth").mkdir()
+    service, _, _ = _make_service(tmp_path)
+
+    summary = service.index_all_features()
+
+    assert summary.total_features == 0
+    assert summary.successful_features == 0
+    assert summary.failed_features == 0
+    assert summary.features == []
+    assert summary.total_chunks_indexed == 0
+    assert summary.total_embedding_tokens == 0
+    assert service.list_history() == []
+
+
+def test_index_feature_builds_and_persists_the_bm25_index_from_the_canonical_chunks(tmp_path):
+    _write(tmp_path, "Appointments", "workflows", "a.md", "# Encounter Status\n\nThe C_10 field drives transitions.")
+    service, vector_store, _ = _make_service(tmp_path)
+
+    service.index_feature("Appointments")
+
+    corpus = json.loads((tmp_path / "bm25" / "corpus.json").read_text(encoding="utf-8"))
+    records = corpus["WORKFLOW"]
+    stored = vector_store._collection.get(where={"feature": "Appointments"}, include=["documents", "metadatas"])
+
+    # BM25 corpus == the exact chunks that were embedded into ChromaDB
+    assert {r["chunk_id"] for r in records} == set(stored["ids"])
+    assert {r["text"] for r in records} == set(stored["documents"])
+    assert records[0]["metadata"]["sectionHeading"] == "Encounter Status"
+    assert records[0]["tokens"]  # tokenized at build time
+
+    manifest = json.loads((tmp_path / "bm25" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["chunk_count"] == len(stored["ids"])
+    assert manifest["features"] == {"Appointments": len(stored["ids"])}
+
+
+def test_reindexing_a_feature_replaces_its_bm25_rows_without_touching_other_features(tmp_path):
+    _write(tmp_path, "Appointments", "workflows", "a.md", "# Alpha\n\nOriginal appointments workflow text.")
+    _write(tmp_path, "Coding Tool", "workflows", "b.md", "# Beta\n\nCoding tool workflow text.")
+    service, _, _ = _make_service(tmp_path)
+    service.index_feature("Appointments")
+    service.index_feature("Coding Tool")
+
+    # change Appointments' content and re-index only it
+    (tmp_path / "source_of_truth" / "Appointments" / "workflows" / "a.md").write_text(
+        "# Alpha\n\nRevised appointments workflow text.", encoding="utf-8"
+    )
+    service.index_feature("Appointments")
+
+    corpus = json.loads((tmp_path / "bm25" / "corpus.json").read_text(encoding="utf-8"))
+    by_feature: dict[str, list[str]] = {}
+    for record in corpus["WORKFLOW"]:
+        by_feature.setdefault(record["feature"], []).append(record["text"])
+
+    assert by_feature["Coding Tool"] == ["Beta\n\nCoding tool workflow text."]  # untouched
+    assert by_feature["Appointments"] == ["Alpha\n\nRevised appointments workflow text."]  # replaced, not accumulated
+
+
+def test_indexing_a_feature_with_no_chunks_clears_its_bm25_rows(tmp_path):
+    _write(tmp_path, "Appointments", "workflows", "a.md", "# Alpha\n\nSome text.")
+    service, _, _ = _make_service(tmp_path)
+    service.index_feature("Appointments")
+
+    # remove the only document, re-index
+    (tmp_path / "source_of_truth" / "Appointments" / "workflows" / "a.md").unlink()
+    service.index_feature("Appointments")
+
+    corpus = json.loads((tmp_path / "bm25" / "corpus.json").read_text(encoding="utf-8"))
+    assert all(r["feature"] != "Appointments" for bucket in corpus.values() for r in bucket)
+
+
+def test_bm25_index_is_queryable_immediately_after_indexing(tmp_path):
+    from app.retrievers.bm25_retriever import BM25Retriever
+
+    _write(tmp_path, "Appointments", "workflows", "a.md", "# Encounter Status\n\nThe C_10 field drives transitions.")
+    _write(tmp_path, "Appointments", "TestCases", "t.csv", "id,summary\n1,Verify C_10 transition\n")
+    service, _, _ = _make_service(tmp_path)
+    service.index_feature("Appointments")
+
+    retriever = BM25Retriever(service._bm25_index_manager)
+    matches = retriever.retrieve("What does C_10 do?", top_k=10, filters={"artifactType": "WORKFLOW"})
+
+    assert [m.chunk.section_heading for m in matches] == ["Encounter Status"]
+
+
 def test_index_feature_creates_a_timestamped_history_folder_under_index_subfolder(tmp_path):
     _write(tmp_path, "Appointments", "workflows", "a.txt", "ROLE PERMISSIONS\n\nSome body text.")
     service, vector_store, _ = _make_service(tmp_path)
@@ -255,6 +425,13 @@ def test_index_feature_does_not_create_history_when_chroma_storage_fails(tmp_pat
         embedding_service=embedding_service,
         vector_store=vector_store,
         history_service=history_service,
+        bm25_index_manager=BM25IndexManager(
+            index_dir=tmp_path / "bm25",
+            collection_name=collection_name,
+            tokenizer=tokenize,
+            tokenizer_version=TOKENIZER_VERSION,
+            chunking_signature="chunk_size=500,chunk_overlap=50",
+        ),
         embedding_model=_EMBEDDING_MODEL,
         price_per_1k_tokens=_PRICE_PER_1K_TOKENS,
     )

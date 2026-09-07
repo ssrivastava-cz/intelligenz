@@ -5,12 +5,15 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.core.dependencies import (
+    get_bm25_index_manager,
     get_parser_service,
     get_source_of_truth_indexer,
     get_test_plan_service,
     get_upload_service,
 )
 from app.main import app
+from app.retrievers.text_tokenizer import TOKENIZER_VERSION, tokenize
+from app.services.bm25_index_manager import BM25IndexManager
 from app.services.source_of_truth_indexer import SourceOfTruthIndexer
 from app.services.upload_service import UploadService
 from tests.directory_snapshot import diff_snapshots, snapshot_directory
@@ -97,7 +100,23 @@ def source_of_truth_indexer(upload_service, tmp_path):
 
 
 @pytest.fixture
-async def client(upload_service, source_of_truth_indexer):
+def bm25_index_manager(tmp_path):
+    """Isolates the persistent BM25 index to a per-test temp directory so
+    indexing endpoints never write into the real backend/data/bm25/."""
+    manager = BM25IndexManager(
+        index_dir=tmp_path / "bm25",
+        collection_name="source_of_truth_chunks",
+        tokenizer=tokenize,
+        tokenizer_version=TOKENIZER_VERSION,
+        chunking_signature="chunk_size=500,chunk_overlap=50",
+    )
+    app.dependency_overrides[get_bm25_index_manager] = lambda: manager
+    yield manager
+    app.dependency_overrides.pop(get_bm25_index_manager, None)
+
+
+@pytest.fixture
+async def client(upload_service, source_of_truth_indexer, bm25_index_manager):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac

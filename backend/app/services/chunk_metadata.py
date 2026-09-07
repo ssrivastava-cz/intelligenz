@@ -31,6 +31,11 @@ def build_chunk_metadata(
         # position.
         "documentId": chunk.document_id,
         "chunkNumber": annotated.chunk_number,
+        # Always present — `ParsedDocument.title` is a required field
+        # (every parser already computes one, falling back to the
+        # filename-derived title when the format has no title of its
+        # own), so this is never a new/independent title algorithm.
+        "documentTitle": item.parsed_document.title,
     }
     # Chroma rejects `None` metadata values outright, so headings/page
     # numbers that don't apply are simply omitted rather than stored as null.
@@ -38,4 +43,11 @@ def build_chunk_metadata(
         metadata["sectionHeading"] = annotated.section_heading
     if chunk.page_number is not None:
         metadata["pageNumber"] = chunk.page_number
+    # `sourcePath`/`sourceFolder` are Source of Truth-only provenance —
+    # `None` for a chunk from an uploaded document, which was never
+    # discovered under source_of_truth/ in the first place.
+    if item.parsed_document.metadata.source_path is not None:
+        metadata["sourcePath"] = item.parsed_document.metadata.source_path
+    if item.parsed_document.metadata.source_folder is not None:
+        metadata["sourceFolder"] = item.parsed_document.metadata.source_folder
     return metadata

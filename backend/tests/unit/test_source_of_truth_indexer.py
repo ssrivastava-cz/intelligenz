@@ -69,6 +69,28 @@ def test_document_type_is_independent_of_category(tmp_path):
     assert document.document_type == DocumentType.CSV
 
 
+def test_discover_documents_computes_a_portable_relative_source_path(tmp_path):
+    _write(tmp_path, "Service Model 1", "workflows", "onboarding.md")
+
+    indexer = _make_indexer(tmp_path)
+    [document] = indexer.discover_documents("Service Model 1")
+
+    assert document.source_relative_path == "source_of_truth/Service Model 1/workflows/onboarding.md"
+    # Portable across OS: always forward slashes, never the machine's
+    # own absolute path (e.g. no "C:\Users\..." or "/Users/...").
+    assert "\\" not in document.source_relative_path
+    assert not document.source_relative_path.startswith(("/", "C:"))
+
+
+def test_discover_documents_sets_source_folder_to_the_top_level_feature_folder(tmp_path):
+    _write(tmp_path, "Service Model 1", "TestCases", "cases.csv")
+
+    indexer = _make_indexer(tmp_path)
+    [document] = indexer.discover_documents("Service Model 1")
+
+    assert document.source_folder == "Service Model 1"
+
+
 def test_discover_documents_ignores_unrecognized_subfolders(tmp_path):
     _write(tmp_path, "Appointments", "workflows", "a.txt")
     _write(tmp_path, "Appointments", "SomeOtherFolder", "b.txt")

@@ -1,0 +1,115 @@
+.chat-message {
+  display: flex;
+  width: 100%;
+}
+
+.chat-message--user {
+  justify-content: flex-end;
+}
+
+.chat-message--assistant {
+  justify-content: flex-start;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+
+.chat-message__avatar {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-full);
+  background: var(--accent-muted);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 22px;
+}
+
+.chat-message__body {
+  min-width: 0;
+  max-width: 78%;
+}
+
+.chat-message__label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: var(--space-1);
+}
+
+.chat-message__bubble {
+  border-radius: var(--radius-lg);
+  padding: var(--space-3) var(--space-4);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.chat-message__bubble--user {
+  max-width: 78%;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-bottom-right-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-message__bubble--assistant {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-bottom-left-radius: var(--radius-sm);
+  color: var(--text-primary);
+}
+
+.chat-message__answer {
+  color: var(--text-primary);
+}
+
+.chat-message__error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.chat-message__error-text {
+  color: var(--danger);
+}
+
+.chat-message__sources {
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.chat-message__sources-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: var(--space-2);
+}
+
+.chat-message__feedback {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+  flex-wrap: wrap;
+}
+
+.chat-message__feedback-prompt {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-right: var(--space-1);
+}
+
+.chat-message__thanks {
+  font-size: 0.78rem;
+  color: var(--success);
+}

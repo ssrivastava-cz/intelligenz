@@ -1,7 +1,8 @@
 import pytest
 
 from app.core.exceptions import ValidationError
-from app.models.common import DocumentSource, DocumentType
+from app.models.common import DocumentCategory, DocumentSource, DocumentType
+from app.services.chunking_engine import ChunkingEngine
 from app.services.parsers.csv_parser import CsvParser
 from tests.unit.parsers.factories import make_document
 
@@ -229,6 +230,112 @@ def test_cp1252_fallback_never_uses_errors_ignore_or_replace():
     [section] = CsvParser().parse(document, content).sections
 
     assert "Renewal – 100% success — confirmed’s" in section.content
+
+
+# --- blank-row filtering ---
+
+
+def test_completely_empty_row_is_discarded():
+    content = b"a,b,c\n,,\n1,2,3\n"
+    document = make_document(filename="rows.csv", document_type=DocumentType.CSV)
+
+    parsed = CsvParser().parse(document, content)
+
+    assert len(parsed.sections) == 1
+    assert "a: 1" in parsed.sections[0].content
+
+
+def test_whitespace_only_row_is_discarded():
+    content = b"a,b,c\n   , ,\t\n1,2,3\n"
+    document = make_document(filename="rows.csv", document_type=DocumentType.CSV)
+
+    parsed = CsvParser().parse(document, content)
+
+    assert len(parsed.sections) == 1
+    assert "a: 1" in parsed.sections[0].content
+
+
+def test_row_with_one_meaningful_value_is_retained():
+    content = b"a,b,c\n,,some value\n"
+    document = make_document(filename="rows.csv", document_type=DocumentType.CSV)
+
+    parsed = CsvParser().parse(document, content)
+
+    assert len(parsed.sections) == 1
+    assert "c: some value" in parsed.sections[0].content
+
+
+def test_row_with_only_an_id_column_populated_is_retained():
+    content = b"Patient ID,Notes\nP10001,\n"
+    document = make_document(filename="rows.csv", document_type=DocumentType.CSV)
+
+    parsed = CsvParser().parse(document, content)
+
+    assert len(parsed.sections) == 1
+    assert "Patient ID: P10001" in parsed.sections[0].content
+
+
+def test_row_with_zero_value_is_retained():
+    """"0" is a meaningful string value, never treated as blank."""
+    content = b"a,b\n0,\n"
+    document = make_document(filename="rows.csv", document_type=DocumentType.CSV)
+
+    parsed = CsvParser().parse(document, content)
+
+    assert len(parsed.sections) == 1
+    assert "a: 0" in parsed.sections[0].content
+
+
+def test_row_with_false_string_value_is_retained():
+    content = b"a,b\nFalse,\n"
+    document = make_document(filename="rows.csv", document_type=DocumentType.CSV)
+
+    parsed = CsvParser().parse(document, content)
+
+    assert len(parsed.sections) == 1
+    assert "a: False" in parsed.sections[0].content
+
+
+def test_multiple_blank_rows_among_populated_rows_are_all_discarded():
+    content = b"id,title\n,\n1,Book appointment\n,\n2,Cancel appointment\n,\n"
+    document = make_document(filename="rows.csv", document_type=DocumentType.CSV)
+
+    parsed = CsvParser().parse(document, content)
+
+    assert len(parsed.sections) == 2
+    assert "Book appointment" in parsed.sections[0].content
+    assert "Cancel appointment" in parsed.sections[1].content
+
+
+def test_blank_rows_never_reach_chunking():
+    content = b"id,title\n,\n1,Book appointment\n,\n"
+    document = make_document(filename="rows.csv", document_type=DocumentType.CSV)
+
+    parsed = CsvParser().parse(document, content)
+    chunks = ChunkingEngine().chunk_document(parsed, DocumentCategory.TEST_CASE)
+
+    assert len(chunks) == 1
+    assert "Book appointment" in chunks[0].chunk_text
+
+
+def test_a_csv_of_only_blank_rows_produces_no_chunks():
+    content = b"a,b,c\n,,\n,,\n   , ,\n"
+    document = make_document(filename="all_blank.csv", document_type=DocumentType.CSV)
+
+    parsed = CsvParser().parse(document, content)
+    chunks = ChunkingEngine().chunk_document(parsed, DocumentCategory.TEST_CASE)
+
+    assert chunks == []
+
+
+def test_logs_how_many_blank_rows_were_skipped(caplog):
+    content = b"a,b\n,\n1,2\n,\n"
+    document = make_document(filename="rows.csv", document_type=DocumentType.CSV)
+
+    with caplog.at_level("INFO"):
+        CsvParser().parse(document, content)
+
+    assert any("2" in message and "rows.csv" in message for message in caplog.messages)
 
 
 def test_logs_the_encoding_actually_used(caplog):

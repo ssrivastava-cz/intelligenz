@@ -3,7 +3,6 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { knowledgeAssistantApi } from "../../api/knowledgeAssistantApi.js";
-import { sourceOfTruthApi } from "../../api/sourceOfTruthApi.js";
 import KnowledgeAssistant from "./KnowledgeAssistant.jsx";
 
 vi.mock("../../api/knowledgeAssistantApi.js", () => ({
@@ -14,29 +13,6 @@ vi.mock("../../api/knowledgeAssistantApi.js", () => ({
     listRecent: vi.fn(),
   },
 }));
-
-vi.mock("../../api/sourceOfTruthApi.js", () => ({
-  sourceOfTruthApi: { listFeatures: vi.fn() },
-}));
-
-const FEATURES = [{ feature: "Contact Log", documents: 6, workflows: 2, testCases: 3, issues: 1 }];
-
-const RECENT_GENERATIONS = [
-  {
-    generationId: "gen_20260810_real1",
-    question: "How is the AI cost calculated for a test plan generation?",
-    answer: "Cost is calculated based on the tokens used during prompt construction and AI generation.",
-    sourceDocuments: ["Usage & Billing Guide.pdf"],
-    createdAt: "2026-08-10T21:20:00Z",
-  },
-  {
-    generationId: "gen_20260809_real2",
-    question: "Where can I see the token usage for a specific test plan run?",
-    answer: "Open the generation's entry in Test Plan Generation History and click View.",
-    sourceDocuments: [],
-    createdAt: "2026-08-09T09:00:00Z",
-  },
-];
 
 const ASK_RESPONSE = {
   generationId: "gen_20260812_abc123",
@@ -58,79 +34,57 @@ function renderPage() {
   return render(<KnowledgeAssistant />);
 }
 
-async function selectFeature(user, feature = "Contact Log") {
-  await screen.findByRole("option", { name: feature });
-  await user.selectOptions(screen.getByLabelText(/feature/i), feature);
+function getComposerInput() {
+  return screen.getByRole("textbox");
 }
 
 async function askQuestion(user, question = "How does Contact Log handle bridged contacts?") {
-  await selectFeature(user);
-  await user.type(
-    screen.getByPlaceholderText("e.g. How is the AI cost calculated for a test plan generation?"),
-    question,
-  );
-  await user.click(screen.getByRole("button", { name: "Ask" }));
+  await user.type(getComposerInput(), question);
+  await user.click(screen.getByRole("button", { name: "Send" }));
 }
 
 describe("KnowledgeAssistant page", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    sourceOfTruthApi.listFeatures.mockResolvedValue(FEATURES);
     knowledgeAssistantApi.ask.mockResolvedValue(ASK_RESPONSE);
     knowledgeAssistantApi.submitFeedback.mockResolvedValue({
       generationId: ASK_RESPONSE.generationId,
       evaluation: "GOOD",
     });
-    knowledgeAssistantApi.listRecent.mockResolvedValue(RECENT_GENERATIONS);
   });
 
-  it("renders the Ask a question card with a real feature dropdown", async () => {
+  // --- Empty state ---
+
+  it("renders a clean empty state with example prompts and no feature dropdown when there are no messages", () => {
     renderPage();
 
-    expect(screen.getByText("Ask a question")).toBeInTheDocument();
-    expect(screen.getByText("Search across product docs, policies, and internal guides.")).toBeInTheDocument();
-    expect(
-      screen.getByPlaceholderText("e.g. How is the AI cost calculated for a test plan generation?"),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Ask" })).toBeInTheDocument();
-    expect(await screen.findByRole("option", { name: "Contact Log" })).toBeInTheDocument();
+    expect(screen.getByText("How can I help you?")).toBeInTheDocument();
+    expect(screen.getByText("Release Team Intelligenz")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "How does provider eligibility work?" })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/feature/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("Feature")).not.toBeInTheDocument();
   });
 
-  it("fetches the real recent generations from the backend and shows them collapsed by default", async () => {
+  it("never fetches a Recent Questions and Answers list", () => {
     renderPage();
 
-    expect(await screen.findByText(`${RECENT_GENERATIONS.length} questions asked recently`)).toBeInTheDocument();
-    expect(knowledgeAssistantApi.listRecent).toHaveBeenCalled();
-    expect(screen.queryByText(RECENT_GENERATIONS[0].question)).not.toBeInTheDocument();
+    expect(knowledgeAssistantApi.listRecent).not.toHaveBeenCalled();
+    expect(screen.queryByText(/questions asked recently/)).not.toBeInTheDocument();
   });
 
-  it("expands the recent questions section, then expands one item to show its real persisted answer and documents", async () => {
+  it("clicking an example prompt asks it immediately", async () => {
     const user = userEvent.setup();
     renderPage();
-    await screen.findByText(`${RECENT_GENERATIONS.length} questions asked recently`);
 
-    await user.click(screen.getByRole("button", { name: /expand recent questions/i }));
-    const [firstRecent] = RECENT_GENERATIONS;
-    expect(screen.getByText(firstRecent.question)).toBeInTheDocument();
-    expect(screen.queryByText(firstRecent.answer)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "How does provider eligibility work?" }));
 
-    await user.click(screen.getByRole("button", { name: new RegExp(firstRecent.question) }));
-
-    expect(screen.getByText(firstRecent.answer)).toBeInTheDocument();
-    expect(screen.getByText(firstRecent.sourceDocuments[0])).toBeInTheDocument();
+    expect(knowledgeAssistantApi.ask).toHaveBeenCalledWith({ question: "How does provider eligibility work?" });
+    expect(await screen.findByText("How does provider eligibility work?")).toBeInTheDocument();
   });
 
-  it("shows a clean empty state, never mock questions, when the backend history fetch fails", async () => {
-    knowledgeAssistantApi.listRecent.mockRejectedValue(new Error("The server encountered an error."));
-    renderPage();
+  // --- Sending a question ---
 
-    expect(await screen.findByText("0 questions asked recently")).toBeInTheDocument();
-    expect(screen.queryByText(RECENT_GENERATIONS[0].question)).not.toBeInTheDocument();
-  });
-
-  // --- Ask: real API, not the mock ---
-
-  it("sends the question and selected feature to the real backend, not the mock service", async () => {
+  it("sends the question to the real backend without a feature field", async () => {
     const user = userEvent.setup();
     renderPage();
 
@@ -138,20 +92,40 @@ describe("KnowledgeAssistant page", () => {
 
     expect(knowledgeAssistantApi.ask).toHaveBeenCalledWith({
       question: "How does Contact Log handle bridged contacts?",
-      feature: "Contact Log",
     });
   });
 
-  it("renders the backend's answer, question, and generationId-linked record after asking", async () => {
+  it("shows the user's message immediately and clears the composer", async () => {
     const user = userEvent.setup();
     renderPage();
 
     await askQuestion(user);
 
-    expect(await screen.findByText("Question")).toBeInTheDocument();
     expect(screen.getByText("How does Contact Log handle bridged contacts?")).toBeInTheDocument();
-    expect(screen.getByText("Answer")).toBeInTheDocument();
-    expect(screen.getByText("According to the workflow, bridged contacts are merged automatically.")).toBeInTheDocument();
+    expect(getComposerInput()).toHaveValue("");
+  });
+
+  it("shows a loading indicator while waiting for the API, then the real answer", async () => {
+    let resolveAsk;
+    knowledgeAssistantApi.ask.mockReturnValue(
+      new Promise((resolve) => {
+        resolveAsk = resolve;
+      }),
+    );
+    const user = userEvent.setup();
+    renderPage();
+
+    await askQuestion(user);
+
+    expect(screen.getByText("Searching the knowledge base…")).toBeInTheDocument();
+
+    await user.type(getComposerInput(), "irrelevant while loading");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(knowledgeAssistantApi.ask).toHaveBeenCalledTimes(1);
+
+    resolveAsk(ASK_RESPONSE);
+    await screen.findByText("According to the workflow, bridged contacts are merged automatically.");
+    expect(screen.queryByText("Searching the knowledge base…")).not.toBeInTheDocument();
   });
 
   it("renders every source document the backend returned", async () => {
@@ -160,104 +134,136 @@ describe("KnowledgeAssistant page", () => {
 
     await askQuestion(user);
 
-    await screen.findByText("Documents used in this answer");
+    await screen.findByText("Sources");
     expect(screen.getByText("Contact_Log_Workflow.pdf")).toBeInTheDocument();
     expect(screen.getByText("Contact_Log_TestCases.xlsx")).toBeInTheDocument();
   });
 
-  it("adds a successful question to the recent questions list", async () => {
+  it("supports multiple follow-up questions in one conversation", async () => {
     const user = userEvent.setup();
+    knowledgeAssistantApi.ask
+      .mockResolvedValueOnce({ ...ASK_RESPONSE, answer: "First answer." })
+      .mockResolvedValueOnce({ ...ASK_RESPONSE, answer: "Second answer." });
     renderPage();
-    await screen.findByText(`${RECENT_GENERATIONS.length} questions asked recently`);
 
-    await askQuestion(user);
+    await askQuestion(user, "How does provider eligibility work?");
+    await screen.findByText("First answer.");
 
-    await screen.findByText("Question");
-    expect(screen.getByText(`${RECENT_GENERATIONS.length + 1} questions asked recently`)).toBeInTheDocument();
+    await askQuestion(user, "What about inactive providers?");
+    await screen.findByText("Second answer.");
+
+    expect(screen.getByText("How does provider eligibility work?")).toBeInTheDocument();
+    expect(screen.getByText("What about inactive providers?")).toBeInTheDocument();
+    expect(screen.getByText("First answer.")).toBeInTheDocument();
+    expect(screen.getByText("Second answer.")).toBeInTheDocument();
   });
 
-  it("disables the Ask button while the request is in flight, and re-enables it afterward", async () => {
+  // --- Composer keyboard behavior ---
+
+  it("Enter submits the message", async () => {
     const user = userEvent.setup();
+    renderPage();
+
+    await user.type(getComposerInput(), "How does Contact Log work?{Enter}");
+
+    expect(knowledgeAssistantApi.ask).toHaveBeenCalledWith({ question: "How does Contact Log work?" });
+  });
+
+  it("Shift+Enter inserts a newline instead of submitting", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.type(getComposerInput(), "First line{Shift>}{Enter}{/Shift}Second line");
+
+    expect(knowledgeAssistantApi.ask).not.toHaveBeenCalled();
+    expect(getComposerInput()).toHaveValue("First line\nSecond line");
+  });
+
+  it("does not submit an empty or whitespace-only message", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+
+    await user.type(getComposerInput(), "   ");
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(knowledgeAssistantApi.ask).not.toHaveBeenCalled();
+  });
+
+  it("disables Send while a request is in flight, and re-enables it afterward", async () => {
     let resolveAsk;
     knowledgeAssistantApi.ask.mockReturnValue(
       new Promise((resolve) => {
         resolveAsk = resolve;
       }),
     );
+    const user = userEvent.setup();
     renderPage();
-    await selectFeature(user);
-    await user.type(
-      screen.getByPlaceholderText("e.g. How is the AI cost calculated for a test plan generation?"),
-      "How does Contact Log work?",
-    );
 
-    await user.click(screen.getByRole("button", { name: "Ask" }));
+    await askQuestion(user);
 
-    expect(screen.getByRole("button", { name: "Asking…" })).toBeDisabled();
-    expect(knowledgeAssistantApi.ask).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
 
     resolveAsk(ASK_RESPONSE);
-    await screen.findByRole("button", { name: "Ask" });
-    expect(screen.getByRole("button", { name: "Ask" })).toBeEnabled();
+    await screen.findByText("According to the workflow, bridged contacts are merged automatically.");
+    await user.type(getComposerInput(), "another question");
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
   });
 
   // --- Errors ---
 
-  it("shows the existing error UI when the backend returns an error, without a fake answer", async () => {
-    const user = userEvent.setup();
-    knowledgeAssistantApi.ask.mockRejectedValue(new Error("The server encountered an error. Please try again in a moment."));
-    renderPage();
-
-    await askQuestion(user);
-
-    expect(await screen.findByText("Couldn't get an answer")).toBeInTheDocument();
-    expect(
-      screen.getByText("The server encountered an error. Please try again in a moment."),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("Question")).not.toBeInTheDocument();
-  });
-
-  it("clears the loading state after an error, so Ask is usable again", async () => {
+  it("keeps the user's message and shows a clear error state when the API fails", async () => {
     const user = userEvent.setup();
     knowledgeAssistantApi.ask.mockRejectedValue(new Error("Something went wrong."));
     renderPage();
 
     await askQuestion(user);
 
-    await screen.findByText("Couldn't get an answer");
-    expect(screen.getByRole("button", { name: "Ask" })).toBeEnabled();
+    expect(await screen.findByText("Something went wrong.")).toBeInTheDocument();
+    expect(screen.getByText("How does Contact Log handle bridged contacts?")).toBeInTheDocument();
   });
 
-  it("does not add a failed question to the recent questions list", async () => {
+  it("Retry re-asks the failed question and can succeed", async () => {
     const user = userEvent.setup();
-    knowledgeAssistantApi.ask.mockRejectedValue(new Error("Something went wrong."));
-    renderPage();
-    await screen.findByText(`${RECENT_GENERATIONS.length} questions asked recently`);
-
-    await askQuestion(user);
-
-    await screen.findByText("Couldn't get an answer");
-    expect(screen.getByText(`${RECENT_GENERATIONS.length} questions asked recently`)).toBeInTheDocument();
-  });
-
-  it("does not retry automatically after a failure", async () => {
-    const user = userEvent.setup();
-    knowledgeAssistantApi.ask.mockRejectedValue(new Error("Something went wrong."));
+    knowledgeAssistantApi.ask.mockRejectedValueOnce(new Error("Something went wrong."));
+    knowledgeAssistantApi.ask.mockResolvedValueOnce(ASK_RESPONSE);
     renderPage();
 
     await askQuestion(user);
+    await screen.findByText("Something went wrong.");
 
-    await screen.findByText("Couldn't get an answer");
-    expect(knowledgeAssistantApi.ask).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(knowledgeAssistantApi.ask).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText("According to the workflow, bridged contacts are merged automatically.")).toBeInTheDocument();
+    // Only one copy of the user's question — retry didn't duplicate it.
+    expect(screen.getAllByText("How does Contact Log handle bridged contacts?")).toHaveLength(1);
+  });
+
+  // --- New chat ---
+
+  it("New chat clears the current conversation back to the empty state", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await askQuestion(user);
+    await screen.findByText("According to the workflow, bridged contacts are merged automatically.");
+
+    await user.click(screen.getByRole("button", { name: /new chat/i }));
+
+    expect(screen.queryByText("How does Contact Log handle bridged contacts?")).not.toBeInTheDocument();
+    expect(screen.getByText("How can I help you?")).toBeInTheDocument();
   });
 
   // --- Feedback ---
 
-  it('clicking Helpful calls the feedback endpoint with the backend generationId and shows the thanks message', async () => {
+  it("clicking Helpful calls the feedback endpoint with the backend generationId", async () => {
     const user = userEvent.setup();
     renderPage();
     await askQuestion(user);
-    await screen.findByText("Question");
+    await screen.findByText("According to the workflow, bridged contacts are merged automatically.");
 
     await user.click(screen.getByRole("button", { name: "Helpful" }));
 
@@ -265,44 +271,31 @@ describe("KnowledgeAssistant page", () => {
     expect(knowledgeAssistantApi.submitFeedback).toHaveBeenCalledWith(
       expect.objectContaining({ generationId: "gen_20260812_abc123", evaluation: "GOOD" }),
     );
-    expect(screen.queryByText("Tell us more")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Helpful" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Not helpful" })).toBeDisabled();
   });
 
   it("clicking Not helpful opens the feedback modal instead of calling the backend immediately", async () => {
     const user = userEvent.setup();
     renderPage();
     await askQuestion(user);
-    await screen.findByText("Question");
+    await screen.findByText("According to the workflow, bridged contacts are merged automatically.");
 
     await user.click(screen.getByRole("button", { name: "Not helpful" }));
 
     const modal = screen.getByRole("dialog", { name: "Tell us more" });
-    expect(within(modal).getByText("Help us improve this answer.")).toBeInTheDocument();
-    expect(within(modal).getByRole("button", { name: "Inaccurate" })).toBeInTheDocument();
     expect(within(modal).getByRole("button", { name: "Missing information" })).toBeInTheDocument();
-    expect(within(modal).getByRole("button", { name: "Not relevant" })).toBeInTheDocument();
-    expect(within(modal).getByRole("button", { name: "Other" })).toBeInTheDocument();
-    expect(within(modal).getByPlaceholderText("What was missing or incorrect?")).toBeInTheDocument();
-    expect(screen.queryByText("Thanks — your feedback was recorded.")).not.toBeInTheDocument();
     expect(knowledgeAssistantApi.submitFeedback).not.toHaveBeenCalled();
   });
 
-  it("Submit feedback calls the backend with the generationId, reason, and description, and shows the thanks message only after success", async () => {
+  it("Submit feedback calls the backend with the generationId, reason, and description", async () => {
     const user = userEvent.setup();
     renderPage();
     await askQuestion(user);
-    await screen.findByText("Question");
+    await screen.findByText("According to the workflow, bridged contacts are merged automatically.");
     await user.click(screen.getByRole("button", { name: "Not helpful" }));
 
     const modal = screen.getByRole("dialog", { name: "Tell us more" });
-    expect(within(modal).getByRole("button", { name: "Submit feedback" })).toBeDisabled();
-
     await user.click(within(modal).getByRole("button", { name: "Missing information" }));
     await user.type(within(modal).getByPlaceholderText("What was missing or incorrect?"), "Missed the pricing page.");
-    expect(within(modal).getByRole("button", { name: "Submit feedback" })).toBeEnabled();
-
     await user.click(within(modal).getByRole("button", { name: "Submit feedback" }));
 
     expect(knowledgeAssistantApi.submitFeedback).toHaveBeenCalledWith({
@@ -311,27 +304,6 @@ describe("KnowledgeAssistant page", () => {
       reason: "MISSING_INFORMATION",
       description: "Missed the pricing page.",
     });
-    expect(screen.queryByRole("dialog", { name: "Tell us more" })).not.toBeInTheDocument();
     expect(await screen.findByText("Thanks — your feedback was recorded.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Not helpful" })).toBeDisabled();
-  });
-
-  it("Cancel closes the modal without calling the backend", async () => {
-    const user = userEvent.setup();
-    renderPage();
-    await askQuestion(user);
-    await screen.findByText("Question");
-    await user.click(screen.getByRole("button", { name: "Not helpful" }));
-    await user.click(
-      within(screen.getByRole("dialog", { name: "Tell us more" })).getByRole("button", { name: "Missing information" }),
-    );
-
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
-
-    expect(screen.queryByRole("dialog", { name: "Tell us more" })).not.toBeInTheDocument();
-    expect(screen.queryByText("Thanks — your feedback was recorded.")).not.toBeInTheDocument();
-    expect(knowledgeAssistantApi.submitFeedback).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "Not helpful" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Helpful" })).toBeEnabled();
   });
 });

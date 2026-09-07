@@ -64,15 +64,34 @@ def _clear_knowledge_assistant_dependency_overrides() -> None:
     app.dependency_overrides.pop(get_generation_repository, None)
 
 
-async def _ask(client, question: str = "How does Contact Log work?", feature: str = "Contact Log"):
-    """Posts a question (no `generationId` in the payload — the backend
-    is the sole authority for it now) and returns the parsed response
-    body, so callers can read the backend-assigned `generationId` off
-    it rather than assuming one.
+def _delete_shared_chroma_collection() -> None:
+    """Since retrieval is now global (no feature filter), and since
+    `chromadb.EphemeralClient()` instances share underlying storage
+    process-wide (see `_override_knowledge_assistant_dependencies`), a
+    test that indexes documents under a feature no other test in this
+    file uses would otherwise leak those chunks into every later test's
+    unfiltered candidate pool. Tests that index such "extra" features
+    must call this in their `finally` block to keep the rest of this
+    file's exact pipeline-stage-count assertions accurate.
     """
-    response = await client.post(
-        "/api/v1/knowledge-assistant/ask", json={"userQuestion": question, "feature": feature}
-    )
+    from app.config.settings import get_settings
+
+    client = chromadb.EphemeralClient(settings=ChromaSettings(anonymized_telemetry=False))
+    try:
+        client.delete_collection(name=get_settings().chroma_collection_name)
+    except ValueError:
+        pass
+
+
+async def _ask(client, question: str = "How does Contact Log work?"):
+    """Posts a question (no `generationId`, and no `feature`, in the
+    payload — the backend is the sole authority for `generationId`, and
+    the Knowledge Assistant searches the entire Source of Truth corpus
+    rather than being scoped to a feature) and returns the parsed
+    response body, so callers can read the backend-assigned
+    `generationId` off it rather than assuming one.
+    """
+    response = await client.post("/api/v1/knowledge-assistant/ask", json={"userQuestion": question})
     return response
 
 
@@ -114,13 +133,71 @@ async def test_ask_endpoint_never_generates_the_generation_id_from_the_request_b
     try:
         response = await client.post(
             "/api/v1/knowledge-assistant/ask",
-            json={"userQuestion": "How does Contact Log work?", "feature": "Contact Log"},
+            json={"userQuestion": "How does Contact Log work?"},
         )
 
         assert response.status_code == 200
         assert response.json()["generationId"]
     finally:
         _clear_knowledge_assistant_dependency_overrides()
+
+
+async def test_ask_endpoint_accepts_a_request_with_only_the_question_no_feature_field_at_all(client, tmp_path):
+    """The request body no longer has a `feature` field to omit — this
+    proves the endpoint works from `userQuestion` alone.
+    """
+    _override_knowledge_assistant_dependencies(tmp_path)
+
+    try:
+        response = await client.post(
+            "/api/v1/knowledge-assistant/ask", json={"userQuestion": "How does Contact Log work?"}
+        )
+
+        assert response.status_code == 200
+    finally:
+        _clear_knowledge_assistant_dependency_overrides()
+
+
+async def test_ask_endpoint_retrieves_evidence_from_multiple_features_in_one_answer(client, tmp_path):
+    """Retrieval is global now, not scoped to one selected feature — a
+    single question can pull evidence out of two different Source of
+    Truth folders (indexed via two separate `/index-feature/{feature}`
+    calls, into the same shared collection) and cite documents from
+    both in one answer.
+    """
+    _write_workflow_document(
+        tmp_path,
+        "Provider Management",
+        "Provider_Eligibility.md",
+        "# Provider Eligibility\n\nProvider eligibility determines whether a provider can be assigned to a visit.",
+    )
+    _write_workflow_document(
+        tmp_path,
+        "Appointment Management",
+        "Appointment_Eligibility.md",
+        "# Appointment Eligibility\n\nAppointment eligibility determines whether a visit is billable.",
+    )
+    fake_client = FakeOpenAIClient(
+        chat_response_content=_valid_answer(["Provider_Eligibility.md", "Appointment_Eligibility.md"])
+    )
+    _override_knowledge_assistant_dependencies(tmp_path, fake_client)
+
+    try:
+        provider_index = await client.post("/api/v1/index-feature/Provider Management")
+        appointment_index = await client.post("/api/v1/index-feature/Appointment Management")
+        assert provider_index.status_code == 200
+        assert appointment_index.status_code == 200
+
+        response = await _ask(client, "How does provider eligibility affect appointment eligibility?")
+
+        assert response.status_code == 200
+        assert set(response.json()["sourceDocuments"]) == {
+            "Provider_Eligibility.md",
+            "Appointment_Eligibility.md",
+        }
+    finally:
+        _clear_knowledge_assistant_dependency_overrides()
+        _delete_shared_chroma_collection()
 
 
 async def test_ask_endpoint_returns_usage_with_actual_and_estimated_tokens(client, tmp_path):
@@ -467,6 +544,46 @@ async def test_debug_endpoint_returns_similarity_and_chunk_detail_without_the_em
         _clear_knowledge_assistant_dependency_overrides()
 
 
+async def test_debug_endpoint_exposes_feature_as_provenance_on_each_retrieved_chunk(client, tmp_path):
+    """Feature is no longer a retrieval filter, but it's retained as
+    provenance on every retrieved chunk — chunks from two different
+    features indexed into the same collection should each report their
+    own origin feature in the debug response.
+    """
+    _write_workflow_document(
+        tmp_path,
+        "Provider Management",
+        "Provider_Eligibility.md",
+        "# Provider Eligibility\n\nProvider eligibility determines whether a provider can be assigned to a visit.",
+    )
+    _write_workflow_document(
+        tmp_path,
+        "Appointment Management",
+        "Appointment_Eligibility.md",
+        "# Appointment Eligibility\n\nAppointment eligibility determines whether a visit is billable.",
+    )
+    fake_client = FakeOpenAIClient(
+        chat_response_content=_valid_answer(["Provider_Eligibility.md", "Appointment_Eligibility.md"])
+    )
+    _override_knowledge_assistant_dependencies(tmp_path, fake_client)
+
+    try:
+        await client.post("/api/v1/index-feature/Provider Management")
+        await client.post("/api/v1/index-feature/Appointment Management")
+
+        ask_response = await _ask(client, "How does provider eligibility affect appointment eligibility?")
+        generation_id = ask_response.json()["generationId"]
+
+        body = (await client.get(f"/api/v1/knowledge-assistant/debug/{generation_id}")).json()
+
+        chunks = body["retrieval"]["workflow"]["chunks"]
+        features_seen = {chunk["feature"] for chunk in chunks}
+        assert features_seen == {"Provider Management", "Appointment Management"}
+    finally:
+        _clear_knowledge_assistant_dependency_overrides()
+        _delete_shared_chroma_collection()
+
+
 async def test_debug_endpoint_returns_pipeline_stage_counts_for_every_source(client, tmp_path):
     _write_workflow_document(
         tmp_path,
@@ -592,9 +709,7 @@ async def test_debug_endpoint_retrieval_diagnostics_is_null_when_retrieval_never
     _override_knowledge_assistant_dependencies(tmp_path, fake_client)
 
     try:
-        response = await client.post(
-            "/api/v1/knowledge-assistant/ask", json={"userQuestion": "   ", "feature": "Contact Log"}
-        )
+        response = await client.post("/api/v1/knowledge-assistant/ask", json={"userQuestion": "   "})
         assert response.status_code >= 400
     finally:
         _clear_knowledge_assistant_dependency_overrides()
@@ -812,7 +927,7 @@ async def test_debug_endpoint_handles_a_question_with_no_retrieved_context_grace
     _override_knowledge_assistant_dependencies(tmp_path)
 
     try:
-        ask_response = await _ask(client, "Is there documentation for this?", feature="Nonexistent Feature")
+        ask_response = await _ask(client, "Is there documentation for this?")
         generation_id = ask_response.json()["generationId"]
 
         response = await client.get(f"/api/v1/knowledge-assistant/debug/{generation_id}")

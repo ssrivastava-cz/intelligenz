@@ -75,6 +75,12 @@ const PATHS = {
       <line x1="21" y1="21" x2="16.65" y2="16.65" />
     </>
   ),
+  arrowUp: (
+    <>
+      <line x1="12" y1="19" x2="12" y2="5" />
+      <polyline points="6,11 12,5 18,11" />
+    </>
+  ),
 };
 
 /** Minimal hand-rolled outline icon set (no external icon library). */

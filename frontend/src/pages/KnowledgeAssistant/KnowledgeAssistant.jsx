@@ -1,79 +1,134 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import EmptyState from "../../components/EmptyState/EmptyState.jsx";
+import Button from "../../components/Button/Button.jsx";
+import Icon from "../../components/Icon/Icon.jsx";
 import { useKnowledgeAssistant } from "../../hooks/useKnowledgeAssistant.js";
-import AnswerCard from "./components/AnswerCard.jsx";
-import AskQuestionCard from "./components/AskQuestionCard.jsx";
+import ChatComposer from "./components/ChatComposer.jsx";
+import ChatMessage from "./components/ChatMessage.jsx";
 import FeedbackModal from "./components/FeedbackModal.jsx";
-import RecentQuestionsSection from "./components/RecentQuestionsSection.jsx";
 import "./KnowledgeAssistant.css";
 
+const EXAMPLE_PROMPTS = [
+  "How does provider eligibility work?",
+  "What are the requirements for appointment eligibility?",
+  "How is AI cost calculated?",
+];
+
+const SCROLL_BOTTOM_THRESHOLD_PX = 80;
+
 /**
- * Ask-a-question workspace for product docs, policies, and internal
- * guides — backed by the real Knowledge Assistant backend
+ * ChatGPT-style conversational workspace for product docs, policies,
+ * and internal guides — backed by the real Knowledge Assistant backend
  * (`useKnowledgeAssistant`, `POST /knowledge-assistant/ask` and
- * `POST /knowledge-assistant/feedback`). `generationId` always comes
- * from the backend; this page never generates one.
+ * `POST /knowledge-assistant/feedback`), global Source-of-Truth
+ * retrieval (no `feature`), unchanged. Conversation history lives only
+ * in frontend state for now (see `useKnowledgeAssistant`) — each
+ * question is still sent to the backend as an independent request; the
+ * backend has no conversation memory yet.
  */
 function KnowledgeAssistant() {
-  const [question, setQuestion] = useState("");
-  const [feature, setFeature] = useState("");
-  const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
-  const { status, error, currentAnswer, recentQuestions, ask, recordFeedback } = useKnowledgeAssistant();
+  const { messages, isLoading, ask, retry, recordFeedback, startNewConversation } = useKnowledgeAssistant();
+  const [feedbackTargetId, setFeedbackTargetId] = useState(null);
+  const conversationRef = useRef(null);
+  const isPinnedToBottomRef = useRef(true);
 
-  function handleAsk() {
-    ask(question, feature);
+  useEffect(() => {
+    const conversation = conversationRef.current;
+    if (!conversation || !isPinnedToBottomRef.current) return;
+    conversation.scrollTop = conversation.scrollHeight;
+  }, [messages]);
+
+  function handleConversationScroll(event) {
+    const element = event.currentTarget;
+    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    isPinnedToBottomRef.current = distanceFromBottom < SCROLL_BOTTOM_THRESHOLD_PX;
   }
 
-  function handleHelpful() {
-    if (!currentAnswer) return;
-    recordFeedback(currentAnswer.generationId, {
-      generationId: currentAnswer.generationId,
+  function handleHelpful(message) {
+    recordFeedback(message.generationId, {
+      generationId: message.generationId,
       evaluation: "GOOD",
       reason: null,
       description: null,
     });
   }
 
+  function handleNotHelpful(message) {
+    setFeedbackTargetId(message.id);
+  }
+
   async function handleFeedbackSubmit({ reason, description }) {
-    if (!currentAnswer) return;
-    await recordFeedback(currentAnswer.generationId, {
-      generationId: currentAnswer.generationId,
+    const target = messages.find((message) => message.id === feedbackTargetId);
+    if (!target) return;
+    await recordFeedback(target.generationId, {
+      generationId: target.generationId,
       evaluation: "BAD",
       reason,
       description,
     });
-    setIsFeedbackModalOpen(false);
+    setFeedbackTargetId(null);
   }
 
   return (
     <div className="knowledge-assistant">
-      <AskQuestionCard
-        question={question}
-        onQuestionChange={setQuestion}
-        feature={feature}
-        onFeatureChange={setFeature}
-        onAsk={handleAsk}
-        isLoading={status === "loading"}
-      />
+      <div className="knowledge-assistant__header">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={startNewConversation}
+          disabled={messages.length === 0}
+        >
+          <Icon name="plus" size={14} />
+          New chat
+        </Button>
+      </div>
 
-      {status === "error" && (
-        <EmptyState icon="x" title="Couldn't get an answer" description={error} />
+      {messages.length === 0 ? (
+        <div className="knowledge-assistant__empty">
+          <p className="knowledge-assistant__empty-brand">Release Team Intelligenz</p>
+          <h2 className="knowledge-assistant__empty-title">How can I help you?</h2>
+          <p className="knowledge-assistant__empty-description">
+            Ask questions about your product documentation, policies, and guides.
+          </p>
+          <div className="knowledge-assistant__examples">
+            {EXAMPLE_PROMPTS.map((prompt) => (
+              <button
+                key={prompt}
+                type="button"
+                className="knowledge-assistant__example"
+                onClick={() => ask(prompt)}
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div
+          className="knowledge-assistant__conversation"
+          ref={conversationRef}
+          onScroll={handleConversationScroll}
+        >
+          {messages.map((message) => (
+            <ChatMessage
+              key={message.id}
+              message={message}
+              onRetry={retry}
+              onHelpful={handleHelpful}
+              onNotHelpful={handleNotHelpful}
+            />
+          ))}
+        </div>
       )}
 
-      {currentAnswer && (
-        <AnswerCard
-          record={currentAnswer}
-          onHelpful={handleHelpful}
-          onNotHelpful={() => setIsFeedbackModalOpen(true)}
-        />
-      )}
-
-      <RecentQuestionsSection items={recentQuestions} />
+      <div className="knowledge-assistant__composer-dock">
+        <ChatComposer onSend={ask} isLoading={isLoading} hasMessages={messages.length > 0} />
+      </div>
 
       <FeedbackModal
-        isOpen={isFeedbackModalOpen}
-        onCancel={() => setIsFeedbackModalOpen(false)}
+        isOpen={feedbackTargetId !== null}
+        onCancel={() => setFeedbackTargetId(null)}
         onSubmit={handleFeedbackSubmit}
       />
     </div>

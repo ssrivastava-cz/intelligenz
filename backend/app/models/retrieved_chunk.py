@@ -39,3 +39,11 @@ class RetrievedChunk(BaseModel):
     # went into it, so a debug view can report "Merged: Yes, Range
     # 18-20, Count 3". `None` means this chunk was never merged.
     merged_chunk_numbers: list[int] | None = None
+    # Provenance only — never a retrieval filter (see
+    # `RetrievalService.retrieve_hybrid`, which searches the whole
+    # corpus regardless of these). `None` for a chunk indexed before
+    # this metadata existed, or one with no Source of Truth path at all
+    # (an uploaded document, for `source_path`/`source_folder`).
+    document_title: str | None = None
+    source_path: str | None = None
+    source_folder: str | None = None

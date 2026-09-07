@@ -1,0 +1,77 @@
+# Build context = backend/. Only `app/` and `requirements.txt` are actually
+# COPYed by the Dockerfile; everything below is excluded to keep the context
+# small and to make it impossible to accidentally ship secrets or local data.
+#
+# NOTE: data/, database/, uploads/, logs/ and source_of_truth/ ARE needed by
+# the running app — but at RUNTIME, via Docker volumes / bind mounts, never
+# baked into the image. The Dockerfile creates empty mountpoints for them.
+
+# --- VCS -----------------------------------------------------------------------
+.git
+.gitignore
+.gitattributes
+
+# --- Secrets / environment ---------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+*credentials*.json
+
+# --- Python caches / build artefacts ---------------------------------------
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# --- Virtualenvs ------------------------------------------------------------
+.venv/
+venv/
+env/
+
+# --- Tooling caches ------------------------------------------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Tests (not needed in the runtime image) --------------------------------
+tests/
+
+# --- Runtime / generated data — provided via volumes at runtime ------------
+data/
+database/
+uploads/
+logs/
+*.sqlite3
+*.sqlite3-journal
+*.db
+_tmp_*/
+
+# --- Source-of-truth documents — bind-mounted at runtime ------------------
+source_of_truth/
+
+# --- Editor / IDE / OS ------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.lnk
+*.swp
+*.tmp
+*.bak
+
+# --- Not needed at runtime -----------------------------------------------------
+pyproject.toml
+Dockerfile
+.dockerignore
+
+# --- Misc junk found in the tree ------------------------------------------
+=0.2,

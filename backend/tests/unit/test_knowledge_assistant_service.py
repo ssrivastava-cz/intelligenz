@@ -22,6 +22,8 @@ from chromadb.config import Settings as ChromaSettings
 from app.core.exceptions import ExternalServiceError, ValidationError
 from app.models.generation_record import KnowledgeAssistantErrorStage
 from app.repositories.filesystem_generation_repository import FileSystemGenerationRepository
+from app.retrievers.text_tokenizer import TOKENIZER_VERSION, tokenize
+from app.services.bm25_index_manager import BM25IndexManager
 from app.services.cost_calculator import CostCalculator
 from app.services.embedding_service import EmbeddingService
 from app.services.knowledge_assistant_prompt_builder import KnowledgeAssistantPromptBuilder
@@ -89,10 +91,18 @@ def _make_service(tmp_path, fake_client: FakeOpenAIClient | None = None, prompt_
     collection_name = f"test_collection_{uuid.uuid4().hex[:8]}"
     vector_store = VectorStoreService(client=chroma_client, collection_name=collection_name)
 
+    _bm25_manager = BM25IndexManager(
+        index_dir=tmp_path / "bm25",
+        collection_name=collection_name,
+        tokenizer=tokenize,
+        tokenizer_version=TOKENIZER_VERSION,
+        chunking_signature="chunk_size=500,chunk_overlap=50",
+    )
     retrieval_service = RetrievalService(
         embedding_service=embedding_service,
         vector_store=vector_store,
         chroma_client=chroma_client,
+        bm25_index_manager=_bm25_manager,
         upload_collection_prefix="uploaded_documents",
         default_top_k=5,
     )
@@ -125,8 +135,34 @@ def _seed_workflow_chunk(vector_store: VectorStoreService, feature: str) -> None
     )
 
 
-def _ask(service, question: str = "How does Contact Log work?", feature: str = "Contact Log"):
-    return service.ask(user_question=question, feature=feature)
+def _seed_chunk(
+    vector_store: VectorStoreService,
+    *,
+    feature: str,
+    chunk_id: str,
+    source_filename: str,
+    text: str,
+    embedding: list[float] | None = None,
+) -> None:
+    """Like `_seed_workflow_chunk`, but for tests that need multiple,
+    independently identifiable chunks — e.g. proving retrieval combines
+    results indexed under different features.
+    """
+    vector_store.replace_feature_chunks(
+        feature=feature,
+        ids=[chunk_id],
+        embeddings=[embedding or [2.0, 2.0]],
+        documents=[text],
+        metadatas=[
+            _workflow_metadata(
+                chunkId=chunk_id, feature=feature, sourceFilename=source_filename, documentId=f"doc-{chunk_id}"
+            )
+        ],
+    )
+
+
+def _ask(service, question: str = "How does Contact Log work?"):
+    return service.ask(user_question=question)
 
 
 # --- OpenAI: successful call, exactly one, correct prompt, correct model ---
@@ -574,7 +610,7 @@ def test_empty_question_is_rejected_before_any_retrieval_or_openai_call(tmp_path
     service, _, _, _ = _make_service(tmp_path, fake_client)
 
     with pytest.raises(ValidationError):
-        service.ask(user_question="   ", feature="Contact Log")
+        service.ask(user_question="   ")
 
     assert fake_client.calls == []
     assert fake_client.chat_calls == []
@@ -601,7 +637,7 @@ def test_ask_persists_retrieved_chunks_through_the_repository(tmp_path):
 def test_ask_handles_no_retrieved_context_for_any_source(tmp_path):
     service, _, _, repository = _make_service(tmp_path)
 
-    generation_id, _ = _ask(service, question="Is there documentation for this?", feature="Nonexistent")
+    generation_id, _ = _ask(service, question="Is there documentation for this?")
 
     generation = repository.get_generation(generation_id)
     assert generation.retrieved_chunks.chunks_retrieved == []
@@ -663,7 +699,7 @@ def _ask_expecting_failure(service, expected_exception_type) -> str:
     newest-first `list_generations()` instead.
     """
     with pytest.raises(expected_exception_type):
-        service.ask(user_question="How does Contact Log work?", feature="Contact Log")
+        service.ask(user_question="How does Contact Log work?")
     [newest] = service._generation_repository.list_generations()[:1]
     return newest.generation_id
 
@@ -765,7 +801,7 @@ def test_input_validation_failure_persists_an_error_record_even_though_nothing_e
     service, _, _, repository = _make_service(tmp_path, fake_client)
 
     with pytest.raises(ValidationError):
-        service.ask(user_question="   ", feature="Contact Log")
+        service.ask(user_question="   ")
     [newest] = repository.list_generations()[:1]
     generation = repository.get_generation(newest.generation_id)
 
@@ -796,3 +832,86 @@ def test_a_failed_generation_directory_still_only_ever_has_one_generation_id(tmp
         _ask(service)
 
     assert len(repository.list_generations()) == 1
+
+
+# --- Global retrieval: feature is provenance, never a restriction ---
+
+
+def test_ask_retrieves_a_relevant_chunk_regardless_of_which_feature_indexed_it(tmp_path):
+    """Feature is no longer a retrieval restriction — a chunk indexed
+    under a feature never mentioned anywhere in the request must still
+    be retrievable and citable.
+    """
+    fake_client = FakeOpenAIClient(dimension=2, chat_response_content=_valid_answer(["Unrelated_Feature_Doc.pdf"]))
+    service, vector_store, _, _ = _make_service(tmp_path, fake_client)
+    _seed_chunk(
+        vector_store,
+        feature="Some Entirely Different Feature",
+        chunk_id="cross-feature-chunk",
+        source_filename="Unrelated_Feature_Doc.pdf",
+        text="Bridged contacts are merged automatically when matching criteria align.",
+    )
+
+    _, answer = _ask(service)
+
+    assert answer.source_documents == ["Unrelated_Feature_Doc.pdf"]
+
+
+def test_ask_combines_relevant_chunks_from_multiple_features_in_one_answer(tmp_path):
+    """A question can be answered from evidence in more than one
+    feature folder at once — global retrieval must not force a single
+    feature to be chosen.
+    """
+    fake_client = FakeOpenAIClient(
+        dimension=2, chat_response_content=_valid_answer(["Feature_A_Doc.pdf", "Feature_B_Doc.pdf"])
+    )
+    service, vector_store, _, repository = _make_service(tmp_path, fake_client)
+    _seed_chunk(
+        vector_store,
+        feature="Feature A",
+        chunk_id="chunk-a",
+        source_filename="Feature_A_Doc.pdf",
+        text="Provider eligibility determines whether a provider can be assigned to a visit.",
+    )
+    _seed_chunk(
+        vector_store,
+        feature="Feature B",
+        chunk_id="chunk-b",
+        source_filename="Feature_B_Doc.pdf",
+        text="Appointment eligibility determines whether a visit is billable.",
+    )
+
+    generation_id, answer = _ask(
+        service, question="How does provider eligibility affect appointment eligibility?"
+    )
+
+    assert set(answer.source_documents) == {"Feature_A_Doc.pdf", "Feature_B_Doc.pdf"}
+    documents_retrieved = repository.get_generation(generation_id).retrieved_chunks.documents_retrieved
+    assert "Feature_A_Doc.pdf" in documents_retrieved
+    assert "Feature_B_Doc.pdf" in documents_retrieved
+
+
+def test_ask_persists_feature_as_provenance_on_each_retrieved_chunk(tmp_path):
+    """Feature is dropped as a retrieval filter but must remain
+    available as metadata/provenance on every retrieved chunk.
+    """
+    fake_client = FakeOpenAIClient(dimension=2, chat_response_content=_valid_answer(["Contact_Log_Workflow.pdf"]))
+    service, vector_store, _, repository = _make_service(tmp_path, fake_client)
+    _seed_workflow_chunk(vector_store, feature="Contact Log")
+
+    generation_id, _ = _ask(service)
+
+    [chunk] = repository.get_generation(generation_id).retrieved_chunks.chunks_retrieved
+    assert chunk.feature == "Contact Log"
+
+
+def test_ask_no_longer_accepts_or_requires_a_feature_argument(tmp_path):
+    """`ask()` doesn't take `feature` at all any more — the Knowledge
+    Assistant works purely from a question.
+    """
+    import inspect
+
+    from app.services.knowledge_assistant_service import KnowledgeAssistantService
+
+    parameters = inspect.signature(KnowledgeAssistantService.ask).parameters
+    assert "feature" not in parameters

@@ -23,6 +23,8 @@ from app.models.retrieval_configuration import RetrievalConfiguration, SourceRet
 from app.repositories.filesystem_generation_repository import FileSystemGenerationRepository
 from app.repositories.generation_repository import GenerationRepository
 from app.retrievers.rank_fusion import ReciprocalRankFusion
+from app.retrievers.text_tokenizer import TOKENIZER_VERSION, tokenize
+from app.services.bm25_index_manager import BM25IndexManager
 from app.services.chunking_engine import ChunkingEngine
 from app.services.cost_calculator import CostCalculator
 from app.services.embedding_service import EmbeddingService
@@ -168,12 +170,33 @@ HistoryServiceDep = Annotated[HistoryService, Depends(get_history_service)]
 
 
 @lru_cache
+def get_bm25_index_manager() -> BM25IndexManager:
+    """Process-wide singleton (one in-memory BM25 index shared by every
+    request). Not loaded here — `app.main`'s lifespan loads it at
+    startup, and `BM25Retriever` lazily loads it on first use as a
+    fallback. Never rebuilt outside `IndexService.index_feature`.
+    """
+    settings = get_settings()
+    return BM25IndexManager(
+        index_dir=Path(settings.bm25_index_dir),
+        collection_name=settings.chroma_collection_name,
+        tokenizer=tokenize,
+        tokenizer_version=TOKENIZER_VERSION,
+        chunking_signature=f"chunk_size={settings.chunk_size},chunk_overlap={settings.chunk_overlap}",
+    )
+
+
+BM25IndexManagerDep = Annotated[BM25IndexManager, Depends(get_bm25_index_manager)]
+
+
+@lru_cache
 def get_index_service(
     indexer: SourceOfTruthIndexerDep,
     chunking_engine: ChunkingEngineDep,
     embedding_service: EmbeddingServiceDep,
     vector_store_service: VectorStoreServiceDep,
     history_service: HistoryServiceDep,
+    bm25_index_manager: BM25IndexManagerDep,
 ) -> IndexService:
     settings = get_settings()
     return IndexService(
@@ -182,6 +205,7 @@ def get_index_service(
         embedding_service=embedding_service,
         vector_store=vector_store_service,
         history_service=history_service,
+        bm25_index_manager=bm25_index_manager,
         embedding_model=settings.embedding_model,
         price_per_1k_tokens=settings.embedding_price_per_1k_tokens,
     )
@@ -251,6 +275,7 @@ def get_retrieval_service(
     embedding_service: EmbeddingServiceDep,
     vector_store_service: VectorStoreServiceDep,
     chroma_client: ChromaClientDep,
+    bm25_index_manager: BM25IndexManagerDep,
 ) -> RetrievalService:
     settings = get_settings()
     default_configuration = RetrievalConfiguration(
@@ -275,6 +300,7 @@ def get_retrieval_service(
         embedding_service=embedding_service,
         vector_store=vector_store_service,
         chroma_client=chroma_client,
+        bm25_index_manager=bm25_index_manager,
         upload_collection_prefix=settings.upload_chroma_collection_prefix,
         default_top_k=settings.retrieval_default_top_k,
         default_configuration=default_configuration,

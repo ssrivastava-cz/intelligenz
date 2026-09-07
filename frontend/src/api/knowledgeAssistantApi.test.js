@@ -15,14 +15,13 @@ describe("knowledgeAssistantApi", () => {
     vi.clearAllMocks();
   });
 
-  it("ask() posts the question and feature, without a generationId", async () => {
+  it("ask() posts the question, without a feature or a generationId", async () => {
     apiClient.post.mockResolvedValue({ generationId: "gen_001" });
 
-    await knowledgeAssistantApi.ask({ question: "How does Contact Log work?", feature: "Contact Log" });
+    await knowledgeAssistantApi.ask({ question: "How does Contact Log work?" });
 
     expect(apiClient.post).toHaveBeenCalledWith("/knowledge-assistant/ask", {
       userQuestion: "How does Contact Log work?",
-      feature: "Contact Log",
       uploadSessionId: undefined,
       topK: undefined,
     });

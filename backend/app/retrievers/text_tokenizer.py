@@ -11,6 +11,11 @@ inflections ("contacts" -> "contact") without adding a new dependency.
 """
 import re
 
+# Bumped whenever `tokenize`'s output changes (pattern, stopwords,
+# stemming). Recorded in the persistent BM25 manifest so a stale index
+# built with an older tokenizer is detectable (`BM25IndexManager.is_stale`).
+TOKENIZER_VERSION = "1"
+
 _WORD_PATTERN = re.compile(r"[A-Za-z0-9_]+")
 
 # Common English function words that carry no topical relevance signal

@@ -14,6 +14,36 @@ class IndexHistoryEntryOut(CamelModel):
     indexed_at: datetime
 
 
+class IndexAllFeatureResultOut(CamelModel):
+    """One feature's result inside a `POST /index-source-of-truth` run."""
+
+    feature: str
+    status: str
+    documents_indexed: int
+    chunks_indexed: int
+    embedding_tokens: int
+    estimated_embedding_cost: float
+    elapsed_seconds: float
+    error: str | None
+
+
+class IndexAllResponse(CamelModel):
+    """Aggregate result of `POST /index-source-of-truth` — every
+    discovered Source of Truth feature indexed through the same pipeline
+    as `POST /index-feature/{feature}`.
+    """
+
+    total_features: int
+    successful_features: int
+    failed_features: int
+    total_documents_indexed: int
+    total_chunks_indexed: int
+    total_embedding_tokens: int
+    total_estimated_embedding_cost: float
+    elapsed_seconds: float
+    features: list[IndexAllFeatureResultOut]
+
+
 class IndexingSummaryOut(CamelModel):
     """One row of Document Indexing & Embedding activity for the Usage
     Dashboard — a distinct AI activity type from Test Plan Generation

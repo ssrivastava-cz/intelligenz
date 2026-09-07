@@ -14,6 +14,8 @@ from chromadb.config import Settings as ChromaSettings
 
 from app.core.dependencies import get_chroma_client, get_generation_service, get_history_service, get_openai_client
 from app.main import app
+from app.retrievers.text_tokenizer import TOKENIZER_VERSION, tokenize
+from app.services.bm25_index_manager import BM25IndexManager
 from app.services.cost_calculator import CostCalculator
 from app.services.embedding_service import EmbeddingService
 from app.services.generation_service import GenerationService
@@ -93,11 +95,20 @@ def _override_generate_dependencies_with_max_test_cases(
     fake_openai_client = FakeOpenAIClient(chat_response_content=chat_response_content)
     embedding_service = EmbeddingService(client=fake_openai_client, model="text-embedding-3-small")
     chroma_client = chromadb.EphemeralClient(settings=ChromaSettings(anonymized_telemetry=False))
-    vector_store = VectorStoreService(client=chroma_client, collection_name=f"test_collection_{uuid.uuid4().hex[:8]}")
+    collection_name = f"test_collection_{uuid.uuid4().hex[:8]}"
+    vector_store = VectorStoreService(client=chroma_client, collection_name=collection_name)
+    _bm25_manager = BM25IndexManager(
+        index_dir=tmp_path / "bm25",
+        collection_name=collection_name,
+        tokenizer=tokenize,
+        tokenizer_version=TOKENIZER_VERSION,
+        chunking_signature="chunk_size=500,chunk_overlap=50",
+    )
     retrieval_service = RetrievalService(
         embedding_service=embedding_service,
         vector_store=vector_store,
         chroma_client=chroma_client,
+        bm25_index_manager=_bm25_manager,
         upload_collection_prefix="uploaded_documents",
         default_top_k=5,
     )

@@ -32,6 +32,13 @@ class ParsedDocumentMetadata(BaseModel):
     """Which parser produced this — e.g. "PdfParser". Every parser populates this."""
     parser_version: str
     """The parser implementation's version, e.g. "1.0"."""
+    source_path: str | None = None
+    """Mirrors `Document.source_relative_path` — portable, forward-slashed,
+    e.g. "source_of_truth/Service Model 1/workflows/example.pdf". `None`
+    for a document with no Source of Truth path (a user upload)."""
+    source_folder: str | None = None
+    """Mirrors `Document.source_folder` — the folder directly under
+    source_of_truth/. `None` for a user upload."""
 
 
 class ParsedDocument(BaseModel):

@@ -360,6 +360,45 @@ class VectorStoreService:
         except Exception:
             logger.warning("Best-effort cleanup after a failed ChromaDB write also failed for feature '%s'.", feature)
 
+    def update_chunk_metadata(self, ids: list[str], metadatas: list[dict[str, MetadataValue]]) -> None:
+        """Merges new metadata keys into already-indexed chunks by id,
+        touching neither their embeddings nor their document text —
+        for backfilling a newly-introduced metadata field (e.g.
+        `sourcePath`/`sourceFolder`/`documentTitle`) onto chunks indexed
+        before that field existed, when the chunk's actual text hasn't
+        changed and a full `replace_feature_chunks` would only
+        re-request an identical embedding from OpenAI at needless cost.
+
+        Confirmed against Chroma directly: `Collection.update()` with no
+        `embeddings`/`documents` argument leaves both exactly as they
+        were, and merges the given `metadatas` into each id's *existing*
+        metadata dict rather than replacing it outright — a key already
+        present and not repeated here is preserved, not dropped.
+
+        Never use this when a chunk's text itself has changed (e.g. new
+        CSV/DOCX/PDF parsing behavior producing different chunk
+        boundaries) — `replace_feature_chunks` is the correct path
+        then, since only a full delete-and-re-add keeps ids, embeddings,
+        documents, and metadata all correctly re-derived together.
+        """
+        if not ids:
+            return
+        if len(ids) != len(metadatas):
+            raise ExternalServiceError(
+                f"ChromaDB metadata update failed: ids ({len(ids)}) and metadatas ({len(metadatas)}) "
+                "must be the same length."
+            )
+
+        for batch_ids, batch_metadatas in zip(
+            _chunked(ids, self._write_batch_size), _chunked(metadatas, self._write_batch_size), strict=True
+        ):
+            try:
+                self._collection.update(ids=batch_ids, metadatas=batch_metadatas)
+            except Exception as exc:
+                raise ExternalServiceError(
+                    f"ChromaDB metadata update failed for collection '{self._collection_name}': {exc}"
+                ) from exc
+
     def get_chunks_for_filter(self, where: dict[str, MetadataValue] | None) -> list[VectorMatch]:
         """Reads back every chunk matching `where` with no similarity
         ranking involved — the corpus a lexical (BM25) retriever needs,

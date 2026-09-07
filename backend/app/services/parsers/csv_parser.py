@@ -14,6 +14,14 @@ from an "*ID" column and/or a "Title" column when the CSV has them
 qualify), since a bare row of columns has no heading of its own
 otherwise. A CSV without either just gets an unheaded section per row.
 
+A completely blank row (every field empty/whitespace-only after
+normalization — see `app.utils.text.is_blank_row`) is discarded before
+it ever becomes a `DocumentSection`, so it never reaches chunking or
+embedding. `0`, `False`, and similar falsy-but-meaningful values never
+count as blank; a row is only dropped when *every* field genuinely
+carries no content. A row with at least one meaningful value is
+processed exactly as before.
+
 Encoding: most Source of Truth CSVs are UTF-8 (with or without a BOM —
 `utf-8-sig` handles both identically, stripping the BOM if present and
 decoding as plain UTF-8 otherwise), but exports from Windows tools
@@ -33,7 +41,7 @@ from app.core.logging import get_logger
 from app.models.document import Document
 from app.models.parsed_document import DocumentSection, ParsedDocument, ParsedDocumentMetadata
 from app.services.parsers.base import DocumentParser
-from app.utils.text import title_from_filename
+from app.utils.text import is_blank_row, title_from_filename
 
 logger = get_logger(__name__)
 
@@ -55,7 +63,18 @@ class CsvParser(DocumentParser):
         except csv.Error as exc:
             raise ValidationError(f"Failed to parse CSV '{document.filename}': {exc}") from exc
 
-        sections = [_row_to_section(row) for row in rows] or [DocumentSection(heading=None, content="")]
+        non_blank_rows = [row for row in rows if not is_blank_row(row.values())]
+        blank_row_count = len(rows) - len(non_blank_rows)
+        if blank_row_count:
+            logger.info(
+                "Skipped %d completely blank row(s) in CSV '%s' (%d of %d rows retained).",
+                blank_row_count,
+                document.filename,
+                len(non_blank_rows),
+                len(rows),
+            )
+
+        sections = [_row_to_section(row) for row in non_blank_rows] or [DocumentSection(heading=None, content="")]
 
         return ParsedDocument(
             document_id=document.id,
@@ -70,6 +89,8 @@ class CsvParser(DocumentParser):
                 page_number=None,
                 parser_name=self.parser_name,
                 parser_version=self.parser_version,
+                source_path=document.source_relative_path,
+                source_folder=document.source_folder,
             ),
         )
 

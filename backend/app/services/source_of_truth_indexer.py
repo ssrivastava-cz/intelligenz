@@ -61,7 +61,7 @@ class SourceOfTruthIndexer:
                 continue
 
             for path in sorted(category_dir.iterdir()):
-                document = _build_document(path, feature=feature, category=category)
+                document = _build_document(path, root=self._root, feature=feature, category=category)
                 if document is not None:
                     documents.append(document)
 
@@ -103,7 +103,7 @@ class SourceOfTruthIndexer:
         return results
 
 
-def _build_document(path: Path, feature: str, category: DocumentCategory) -> Document | None:
+def _build_document(path: Path, root: Path, feature: str, category: DocumentCategory) -> Document | None:
     if not path.is_file() or path.name.startswith("."):
         return None
 
@@ -113,6 +113,10 @@ def _build_document(path: Path, feature: str, category: DocumentCategory) -> Doc
         return None  # not a recognized/parseable format — skip it, don't fail the whole scan
 
     stat = path.stat()
+    # Portable — always forward-slashed via `.as_posix()`, and rooted at
+    # `root.name` ("source_of_truth") rather than `root`'s own absolute
+    # path, so this never leaks a machine-specific location.
+    source_relative_path = f"{root.name}/{path.relative_to(root).as_posix()}"
     return Document(
         id=generate_id("doc"),
         filename=path.name,
@@ -123,4 +127,6 @@ def _build_document(path: Path, feature: str, category: DocumentCategory) -> Doc
         category=category,
         storage_path=str(path),
         uploaded_at=datetime.fromtimestamp(stat.st_mtime, tz=UTC),
+        source_relative_path=source_relative_path,
+        source_folder=feature,
     )

@@ -19,6 +19,8 @@ import chromadb
 import httpx
 from chromadb.config import Settings as ChromaSettings
 
+from app.retrievers.text_tokenizer import TOKENIZER_VERSION, tokenize
+from app.services.bm25_index_manager import BM25IndexManager
 from app.services.chunking_engine import ChunkingEngine
 from app.services.embedding_service import EmbeddingService
 from app.services.history_service import HistoryService
@@ -56,6 +58,13 @@ def _make_index_service(tmp_path, history_root) -> IndexService:
         embedding_service=EmbeddingService(client=FakeOpenAIClient(), model="text-embedding-3-small"),
         vector_store=vector_store,
         history_service=HistoryService(history_root=history_root),
+        bm25_index_manager=BM25IndexManager(
+            index_dir=tmp_path / "bm25",
+            collection_name="test_collection",
+            tokenizer=tokenize,
+            tokenizer_version=TOKENIZER_VERSION,
+            chunking_signature="chunk_size=500,chunk_overlap=50",
+        ),
         embedding_model="text-embedding-3-small",
         price_per_1k_tokens=0.00002,
     )

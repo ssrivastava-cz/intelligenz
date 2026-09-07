@@ -1,7 +1,12 @@
 from fastapi import APIRouter
 
 from app.core.dependencies import CostCalculatorDep, HistoryServiceDep, IndexServiceDep
-from app.schemas.index_service import IndexHistoryEntryOut, IndexingStatisticsOut, IndexingSummaryOut
+from app.schemas.index_service import (
+    IndexAllResponse,
+    IndexHistoryEntryOut,
+    IndexingStatisticsOut,
+    IndexingSummaryOut,
+)
 
 router = APIRouter(tags=["knowledge-base-indexing"])
 
@@ -14,6 +19,19 @@ async def index_feature(feature: str, index_service: IndexServiceDep) -> IndexHi
     """
     entry = index_service.index_feature(feature)
     return IndexHistoryEntryOut.model_validate(entry)
+
+
+@router.post("/index-source-of-truth", response_model=IndexAllResponse)
+async def index_source_of_truth(index_service: IndexServiceDep) -> IndexAllResponse:
+    """Indexes every feature folder under `source_of_truth/` in one call,
+    running the exact same per-feature pipeline as
+    `POST /index-feature/{feature}` (discover -> parse -> chunk ->
+    metadata -> embeddings -> ChromaDB -> persistent BM25 -> history),
+    one feature at a time. A feature that fails is reported as `FAILED`
+    with its error and does not stop the rest. Returns per-feature
+    results plus totals.
+    """
+    return IndexAllResponse.model_validate(index_service.index_all_features())
 
 
 @router.get("/index-history", response_model=list[IndexHistoryEntryOut])

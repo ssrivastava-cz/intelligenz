@@ -12,10 +12,16 @@ from app.services.chunk_metadata import build_chunk_metadata
 from app.services.chunking_engine import ChunkingEngine
 
 
-def _make_feature_document(sections: list[DocumentSection], document_id: str = "doc-1") -> ParsedFeatureDocument:
+def _make_feature_document(
+    sections: list[DocumentSection],
+    document_id: str = "doc-1",
+    title: str = "Doc",
+    source_path: str | None = None,
+    source_folder: str | None = None,
+) -> ParsedFeatureDocument:
     parsed_document = ParsedDocument(
         document_id=document_id,
-        title="Doc",
+        title=title,
         sections=sections,
         content="\n\n".join(section.content for section in sections),
         metadata=ParsedDocumentMetadata(
@@ -25,6 +31,8 @@ def _make_feature_document(sections: list[DocumentSection], document_id: str = "
             source_filename="doc.md",
             parser_name="MarkdownParser",
             parser_version="1.0",
+            source_path=source_path,
+            source_folder=source_folder,
         ),
     )
     return ParsedFeatureDocument(
@@ -82,3 +90,64 @@ def test_build_chunk_metadata_gives_every_chunk_the_same_document_id():
     metadatas = [build_chunk_metadata(item, annotated, embedding_tokens=5) for annotated in annotated_chunks]
 
     assert {metadata["documentId"] for metadata in metadatas} == {"doc-shared"}
+
+
+def test_build_chunk_metadata_always_includes_the_documents_title():
+    item = _make_feature_document(
+        [DocumentSection(heading="A", content="Body text.")], title="Contact Log Workflow Guide"
+    )
+    [annotated] = annotate_chunks(item, ChunkingEngine())
+
+    metadata = build_chunk_metadata(item, annotated, embedding_tokens=10)
+
+    assert metadata["documentTitle"] == "Contact Log Workflow Guide"
+
+
+def test_build_chunk_metadata_includes_source_path_and_folder_when_present():
+    item = _make_feature_document(
+        [DocumentSection(heading="A", content="Body text.")],
+        source_path="source_of_truth/Appointments/workflows/doc.md",
+        source_folder="Appointments",
+    )
+    [annotated] = annotate_chunks(item, ChunkingEngine())
+
+    metadata = build_chunk_metadata(item, annotated, embedding_tokens=10)
+
+    assert metadata["sourcePath"] == "source_of_truth/Appointments/workflows/doc.md"
+    assert metadata["sourceFolder"] == "Appointments"
+
+
+def test_build_chunk_metadata_omits_source_path_and_folder_when_absent():
+    """A chunk from an uploaded document (never under source_of_truth/)
+    has no sourcePath/sourceFolder to report — Chroma rejects `None`
+    metadata values outright, so these must be omitted, not stored as
+    null, exactly like sectionHeading/pageNumber already are."""
+    item = _make_feature_document([DocumentSection(heading="A", content="Body text.")])
+    [annotated] = annotate_chunks(item, ChunkingEngine())
+
+    metadata = build_chunk_metadata(item, annotated, embedding_tokens=10)
+
+    assert "sourcePath" not in metadata
+    assert "sourceFolder" not in metadata
+
+
+def test_build_chunk_metadata_preserves_every_existing_field():
+    item = _make_feature_document([DocumentSection(heading="A", content="Body text.")], document_id="doc-99")
+    [annotated] = annotate_chunks(item, ChunkingEngine())
+
+    metadata = build_chunk_metadata(item, annotated, embedding_tokens=10)
+
+    for expected_key in [
+        "chunkId",
+        "artifactType",
+        "feature",
+        "documentSource",
+        "sourceFilename",
+        "parserName",
+        "parserVersion",
+        "embeddingTokens",
+        "documentId",
+        "chunkNumber",
+        "sectionHeading",
+    ]:
+        assert expected_key in metadata

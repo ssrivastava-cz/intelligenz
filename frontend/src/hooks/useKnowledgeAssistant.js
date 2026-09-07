@@ -1,97 +1,109 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
 import { knowledgeAssistantApi } from "../api/knowledgeAssistantApi.js";
 
-const MAX_RECENT_QUESTIONS = 8;
+let nextMessageId = 0;
 
-/**
- * Maps one `GET /knowledge-assistant/recent` row into the same record
- * shape `ask()` produces below, so `RecentQuestionsSection`/
- * `RecentQuestionItem` never need to know whether a record came from
- * the initial fetch or a just-asked question. That endpoint's response
- * carries no feedback status (see `KnowledgeAssistantRecentGenerationOut`)
- * — `null` here matches "no feedback recorded this session", exactly
- * like a freshly-asked question.
- */
-function toRecord(recentGeneration) {
+function generateMessageId() {
+  nextMessageId += 1;
+  return `msg_${nextMessageId}`;
+}
+
+function pendingAssistantMessage(question) {
   return {
-    generationId: recentGeneration.generationId,
-    question: recentGeneration.question,
-    answer: recentGeneration.answer,
-    documents: recentGeneration.sourceDocuments.map((name) => ({ name })),
+    id: generateMessageId(),
+    role: "assistant",
+    status: "loading",
+    question,
+    content: "",
+    documents: [],
     usage: null,
     feedback: null,
-    createdAt: recentGeneration.createdAt,
+    generationId: null,
+    errorMessage: null,
   };
 }
 
 /**
- * Drives the Knowledge Assistant page against the real backend. Every
- * asked question, its answer, and its feedback live in one
- * `generations` list keyed by `generationId` — there's no separate
- * "current answer" record, just a pointer (`currentGenerationId`) into
- * the same list, so a question's answer and feedback can never drift
- * apart. `generationId` always comes from the backend — this hook
- * never invents one. The recent list is seeded from real, persisted
- * generations (`GET /knowledge-assistant/recent`), never mock/seeded
- * data — if that fetch fails, the list simply stays empty rather than
- * falling back to placeholder questions.
+ * Drives the Knowledge Assistant's chat conversation against the real
+ * backend — one flat `messages` list, alternating `user`/`assistant`
+ * entries in the order they occurred, so the UI can render a continuous
+ * conversation instead of a single current answer. Each user question
+ * still goes through `POST /knowledge-assistant/ask` as its own,
+ * independent request (see `knowledgeAssistantApi.ask`, which never
+ * sends a `feature` — retrieval is global now) — the backend has no
+ * conversation memory yet, so a follow-up's answer is not informed by
+ * earlier turns even though they all stay visible here. Conversations
+ * live only in this hook's state; there is no fetch-on-mount of past
+ * generations and no persistence beyond the current page session (see
+ * `startNewConversation`).
  */
 export function useKnowledgeAssistant() {
-  const [generations, setGenerations] = useState([]);
-  const [currentGenerationId, setCurrentGenerationId] = useState(null);
-  const [status, setStatus] = useState("idle"); // idle | loading | success | error
-  const [error, setError] = useState(null);
+  const [messages, setMessages] = useState([]);
 
-  useEffect(() => {
-    let isCancelled = false;
+  const isLoading = messages.some((message) => message.status === "loading");
 
-    knowledgeAssistantApi
-      .listRecent()
-      .then((recentGenerations) => {
-        if (isCancelled) return;
-        setGenerations((previous) => [...previous, ...recentGenerations.map(toRecord)]);
-      })
-      .catch(() => {
-        // The full failure is already logged by apiClient itself
-        // (console.error) — never fall back to mock/seeded questions,
-        // just leave the recent list empty, a state the UI already
-        // renders cleanly.
-      });
-
-    return () => {
-      isCancelled = true;
-    };
-  }, []);
-
-  const ask = useCallback(async (question, feature) => {
-    const trimmedQuestion = question.trim();
-    if (!trimmedQuestion || !feature) return;
-
-    setStatus("loading");
-    setError(null);
-
+  const settleAssistantMessage = useCallback(async (assistantMessageId, question) => {
     try {
-      const response = await knowledgeAssistantApi.ask({ question: trimmedQuestion, feature });
-      const record = {
-        generationId: response.generationId,
-        question: response.question,
-        answer: response.answer,
-        documents: response.sourceDocuments.map((name) => ({ name })),
-        usage: response.usage,
-        feedback: null,
-        createdAt: new Date().toISOString(),
-      };
-      setGenerations((previous) => [record, ...previous].slice(0, MAX_RECENT_QUESTIONS));
-      setCurrentGenerationId(record.generationId);
-      setStatus("success");
+      const response = await knowledgeAssistantApi.ask({ question });
+      setMessages((previous) =>
+        previous.map((message) =>
+          message.id === assistantMessageId
+            ? {
+                ...message,
+                status: "success",
+                content: response.answer,
+                documents: response.sourceDocuments.map((name) => ({ name })),
+                usage: response.usage,
+                generationId: response.generationId,
+              }
+            : message,
+        ),
+      );
     } catch (caughtError) {
-      // Never add a failed request as a successful Recent Question, and
-      // never leave a stale answer showing — only `error` drives the UI now.
-      setError(caughtError.message);
-      setStatus("error");
+      setMessages((previous) =>
+        previous.map((message) =>
+          message.id === assistantMessageId
+            ? { ...message, status: "error", errorMessage: caughtError.message }
+            : message,
+        ),
+      );
     }
   }, []);
+
+  const ask = useCallback(
+    (question) => {
+      if (isLoading) return;
+      const trimmedQuestion = question.trim();
+      if (!trimmedQuestion) return;
+
+      const userMessage = { id: generateMessageId(), role: "user", content: trimmedQuestion };
+      const assistantMessage = pendingAssistantMessage(trimmedQuestion);
+      setMessages((previous) => [...previous, userMessage, assistantMessage]);
+
+      return settleAssistantMessage(assistantMessage.id, trimmedQuestion);
+    },
+    [isLoading, settleAssistantMessage],
+  );
+
+  const retry = useCallback(
+    (assistantMessageId) => {
+      if (isLoading) return;
+      const message = messages.find((candidate) => candidate.id === assistantMessageId);
+      if (!message) return;
+
+      setMessages((previous) =>
+        previous.map((candidate) =>
+          candidate.id === assistantMessageId
+            ? { ...candidate, status: "loading", errorMessage: null }
+            : candidate,
+        ),
+      );
+
+      return settleAssistantMessage(assistantMessageId, message.question);
+    },
+    [isLoading, messages, settleAssistantMessage],
+  );
 
   const recordFeedback = useCallback(async (generationId, feedback) => {
     try {
@@ -108,19 +120,21 @@ export function useKnowledgeAssistant() {
       // rather than a false "Thanks" for a submission that didn't land.
       return;
     }
-    setGenerations((previous) =>
-      previous.map((generation) => (generation.generationId === generationId ? { ...generation, feedback } : generation)),
+    setMessages((previous) =>
+      previous.map((message) => (message.generationId === generationId ? { ...message, feedback } : message)),
     );
   }, []);
 
-  const currentAnswer = generations.find((generation) => generation.generationId === currentGenerationId) ?? null;
+  const startNewConversation = useCallback(() => {
+    setMessages([]);
+  }, []);
 
   return {
-    status,
-    error,
-    currentAnswer,
-    recentQuestions: generations,
+    messages,
+    isLoading,
     ask,
+    retry,
     recordFeedback,
+    startNewConversation,
   };
 }

@@ -26,4 +26,7 @@ def to_retrieved_chunk(match: VectorMatch, collection_name: str) -> RetrievedChu
         # "never merge this chunk" rather than guessing at adjacency.
         document_id=metadata.get("documentId"),
         chunk_number=metadata.get("chunkNumber"),
+        document_title=metadata.get("documentTitle"),
+        source_path=metadata.get("sourcePath"),
+        source_folder=metadata.get("sourceFolder"),
     )

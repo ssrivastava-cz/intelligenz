@@ -38,9 +38,25 @@ candidates together (not a separate top-N per source) — a chunk's
 category no longer buys it a reserved slot, which is exactly what fixes
 a generic, high-embedding-similarity section from one category crowding
 out a more relevant chunk from another. Retrieval (vector + BM25) is
-still run per source, respecting each one's own metadata filter, so
-"preserve source-specific retrieval" still holds for candidate
+still run per source, respecting each one's own `artifactType` filter,
+so "preserve source-specific retrieval" still holds for candidate
 generation — only the final ranking/selection step is global.
+
+`retrieve_hybrid()` also searches across every `feature`, not just one
+— the Knowledge Assistant's `SourceOfTruthRetriever`/`BM25Retriever`
+instances are constructed with no bound feature at all, unlike
+`retrieve()`'s (which always binds one). `feature` is still stored,
+untouched, on every chunk's metadata and still comes back on every
+`RetrievedChunk` as provenance; it simply no longer restricts which
+chunks are eligible to match for the Knowledge Assistant.
+
+The BM25 leg for Source of Truth is served from the *persistent* global
+lexical index (`app.services.bm25_index_manager.BM25IndexManager`),
+built once during indexing and loaded at app startup — `BM25Retriever`
+here only queries it, it is never rebuilt per request. Uploaded
+documents (per-session ChromaDB collections, not part of that global
+index) keep the old rebuild-per-query lexical search via
+`ephemeral_bm25_search`.
 """
 import time
 
@@ -60,12 +76,14 @@ from app.retrievers.base import Retriever
 from app.retrievers.bm25_retriever import BM25Match, BM25Retriever
 from app.retrievers.chunk_deduplicator import ChunkDeduplicator
 from app.retrievers.chunk_merger import AdjacentChunkMerger
+from app.retrievers.ephemeral_bm25 import ephemeral_bm25_search
 from app.retrievers.final_chunk_selector import FinalChunkSelector
 from app.retrievers.rank_fusion import FusedCandidate, ReciprocalRankFusion
 from app.retrievers.reranker import LexicalReranker, Reranker
 from app.retrievers.reranking_selector import RerankingSelector
 from app.retrievers.source_of_truth_retriever import SourceOfTruthRetriever
 from app.retrievers.upload_retriever import UploadRetriever
+from app.services.bm25_index_manager import BM25IndexManager
 from app.services.embedding_service import EmbeddingService
 from app.services.vector_store_service import VectorStoreService
 
@@ -76,6 +94,7 @@ class RetrievalService:
         embedding_service: EmbeddingService,
         vector_store: VectorStoreService,
         chroma_client: ClientAPI,
+        bm25_index_manager: BM25IndexManager,
         upload_collection_prefix: str,
         default_top_k: int,
         default_configuration: RetrievalConfiguration | None = None,
@@ -91,6 +110,7 @@ class RetrievalService:
         self._embedding_service = embedding_service
         self._vector_store = vector_store
         self._chroma_client = chroma_client
+        self._bm25_index_manager = bm25_index_manager
         self._upload_collection_prefix = upload_collection_prefix
         self._default_top_k = default_top_k
         self._default_configuration = default_configuration or RetrievalConfiguration.uniform(default_top_k)
@@ -171,15 +191,22 @@ class RetrievalService:
     def retrieve_hybrid(
         self,
         query_text: str,
-        feature: str,
         upload_session_id: str | None = None,
         hybrid_candidate_chunks: int | None = None,
         final_chunks: int | None = None,
     ) -> HybridRetrievalResult:
         """The Knowledge Assistant's retrieval pipeline — see this
-        module's docstring for the full stage sequence. Candidate
-        generation (vector + BM25) still respects each knowledge
-        source's own metadata filter, exactly like `retrieve()`; only
+        module's docstring for the full stage sequence. Unlike
+        `retrieve()`, this searches the *entire* Source of Truth corpus:
+        `SourceOfTruthRetriever`/`BM25Retriever` are constructed with no
+        `feature` at all (`feature=None`), so neither leg of candidate
+        generation restricts by feature — a chunk from any feature folder
+        is eligible, and two chunks from different features can both
+        reach the same answer. `feature` remains on every resulting
+        `RetrievedChunk` as provenance (it's stored metadata, untouched
+        by this) — it just no longer narrows what's searched. Candidate
+        generation still respects each knowledge source's own
+        `artifactType` filter, exactly like `retrieve()`; only
         reranking/threshold/deduplication/top-N selection is global,
         across every source's candidates together. `hybrid_candidate_chunks`/
         `final_chunks` override this instance's configured defaults
@@ -193,8 +220,11 @@ class RetrievalService:
         query_embedding = embedding_batch.embeddings[0]
         query_tokens = self._embedding_service.count_tokens([query_text])[0]
 
-        source_of_truth_retriever = SourceOfTruthRetriever(self._vector_store, feature)
-        bm25_retriever = BM25Retriever(self._vector_store, feature)
+        source_of_truth_retriever = SourceOfTruthRetriever(self._vector_store)
+        # Query-only: the persistent BM25 index is built during indexing
+        # (`IndexService.index_feature`) and loaded at startup — never
+        # rebuilt here, and never read from the whole ChromaDB corpus.
+        bm25_retriever = BM25Retriever(self._bm25_index_manager)
 
         vector_ms = 0.0
         bm25_ms = 0.0
@@ -338,11 +368,16 @@ class RetrievalService:
         return HybridRetrievalResult(retrieval_result=retrieval_result, diagnostics=diagnostics)
 
     def _bm25_retrieve_uploads(self, query_text: str, upload_session_id: str, top_k: int) -> list[BM25Match]:
+        """Uploaded documents live in short-lived, per-session ChromaDB
+        collections that are not part of the persistent global BM25 index,
+        so their lexical leg still builds a small BM25 index per query
+        from the session's chunks (`ephemeral_bm25_search`) — unchanged
+        behaviour, just no longer routed through `BM25Retriever`."""
         collection_name = f"{self._upload_collection_prefix}_{upload_session_id}"
         if not VectorStoreService.collection_exists(self._chroma_client, collection_name):
             return []
         upload_vector_store = VectorStoreService(client=self._chroma_client, collection_name=collection_name)
-        return BM25Retriever(upload_vector_store, feature=upload_session_id).retrieve(query_text, top_k)
+        return ephemeral_bm25_search(upload_vector_store, query_text, top_k, feature=upload_session_id)
 
     def _resolve_configuration(
         self, top_k: int | None, configuration: RetrievalConfiguration | None

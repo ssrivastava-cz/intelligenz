@@ -36,6 +36,8 @@ class MarkdownParser(DocumentParser):
                 page_number=None,
                 parser_name=self.parser_name,
                 parser_version=self.parser_version,
+                source_path=document.source_relative_path,
+                source_folder=document.source_folder,
             ),
         )
 

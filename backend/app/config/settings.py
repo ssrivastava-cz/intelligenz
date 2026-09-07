@@ -52,6 +52,13 @@ class Settings(BaseSettings):
     # kept fully independent of the Source of Truth collection above.
     upload_chroma_collection_prefix: str = "uploaded_documents"
 
+    # Persistent lexical (BM25) index over the same canonical Source of
+    # Truth chunks that are embedded into ChromaDB. Built once per
+    # `IndexService.index_feature` run and loaded at app startup — never
+    # rebuilt per query. Holds `corpus.json` + `manifest.json`; gitignored
+    # like the rest of `data/`. See `app.services.bm25_index_manager`.
+    bm25_index_dir: str = "data/bm25"
+
     # History: every real AI operation (indexing, generation) gets its
     # own timestamped folder here — the only history format the app
     # maintains, read by HistoryService.

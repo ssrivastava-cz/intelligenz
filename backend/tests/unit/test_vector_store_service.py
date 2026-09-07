@@ -242,5 +242,53 @@ def test_query_similar_chunks_applies_a_metadata_where_filter():
     )
 
     matches = vector_store.query_similar_chunks([1.0, 0.0], top_k=5, where={"artifactType": "TEST_CASE"})
-
     assert [match.chunk_id for match in matches] == ["test-case-chunk"]
+
+
+# --- update_chunk_metadata: metadata-only backfill, no re-embedding ---
+
+
+def test_update_chunk_metadata_leaves_the_embedding_and_document_text_untouched():
+    vector_store = _make_vector_store()
+    vector_store.replace_feature_chunks(
+        feature="Appointments",
+        ids=["chunk-1"],
+        embeddings=[[1.0, 2.0, 3.0]],
+        documents=["Original chunk text."],
+        metadatas=[_metadata()],
+    )
+
+    vector_store.update_chunk_metadata(ids=["chunk-1"], metadatas=[{"sourcePath": "source_of_truth/x/y.pdf"}])
+
+    [chunk] = vector_store.get_chunks_for_filter(where=None)
+    assert chunk.chunk_text == "Original chunk text."
+
+
+def test_update_chunk_metadata_merges_new_keys_without_dropping_existing_ones():
+    vector_store = _make_vector_store()
+    vector_store.replace_feature_chunks(
+        feature="Appointments",
+        ids=["chunk-1"],
+        embeddings=[[1.0, 2.0, 3.0]],
+        documents=["Text."],
+        metadatas=[_metadata()],
+    )
+
+    vector_store.update_chunk_metadata(
+        ids=["chunk-1"], metadatas=[{"sourcePath": "source_of_truth/x/y.pdf", "sourceFolder": "x"}]
+    )
+
+    [chunk] = vector_store.get_chunks_for_filter(where=None)
+    assert chunk.metadata["sourcePath"] == "source_of_truth/x/y.pdf"
+    assert chunk.metadata["sourceFolder"] == "x"
+    # Every field that already existed is still there — a metadata-only
+    # update merges into the existing dict, it never replaces it outright.
+    assert chunk.metadata["feature"] == "Appointments"
+    assert chunk.metadata["chunkId"] == "chunk-1"
+    assert chunk.metadata["parserName"] == "MarkdownParser"
+
+
+def test_update_chunk_metadata_does_nothing_for_an_empty_id_list():
+    vector_store = _make_vector_store()
+
+    vector_store.update_chunk_metadata(ids=[], metadatas=[])  # must not raise

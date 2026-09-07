@@ -5,13 +5,18 @@ Merge Adjacent Chunks. All actual vector search is exercised via a real
 `chromadb.EphemeralClient`; only the OpenAI embedding call is faked
 (see tests/fakes.py).
 """
+import tempfile
 import uuid
+from pathlib import Path
 
 import chromadb
 import pytest
 from chromadb.config import Settings as ChromaSettings
 
+from app.models.bm25_index import BM25ChunkRecord
 from app.models.retrieval_configuration import RetrievalConfiguration, SourceRetrievalConfig
+from app.retrievers.text_tokenizer import TOKENIZER_VERSION, tokenize
+from app.services.bm25_index_manager import BM25IndexManager
 from app.services.embedding_service import EmbeddingService
 from app.services.retrieval_service import RetrievalService
 from app.services.vector_store_service import VectorStoreService
@@ -67,15 +72,42 @@ def _make_service(
     collection_name = f"test_collection_{uuid.uuid4().hex[:8]}"
     vector_store = VectorStoreService(client=chroma_client, collection_name=collection_name)
 
+    bm25_index_manager = BM25IndexManager(
+        index_dir=Path(tempfile.mkdtemp(prefix="bm25_test_")),
+        collection_name=collection_name,
+        tokenizer=tokenize,
+        tokenizer_version=TOKENIZER_VERSION,
+        chunking_signature="chunk_size=500,chunk_overlap=50",
+    )
+
     service = RetrievalService(
         embedding_service=embedding_service,
         vector_store=vector_store,
         chroma_client=chroma_client,
+        bm25_index_manager=bm25_index_manager,
         upload_collection_prefix=_UPLOAD_COLLECTION_PREFIX,
         default_top_k=_DEFAULT_TOP_K,
         **kwargs,
     )
     return service, chroma_client, collection_name
+
+
+def _seed_source_of_truth(service, feature, *, ids, embeddings, documents, metadatas):
+    """Seed a Source-of-Truth feature into BOTH ChromaDB (vector leg) and
+    the persistent BM25 index (lexical leg), from the one canonical chunk
+    set — exactly what `IndexService.index_feature` does in production."""
+    VectorStoreService(
+        client=service._chroma_client, collection_name=service._vector_store.collection_name
+    ).replace_feature_chunks(
+        feature=feature, ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas
+    )
+    service._bm25_index_manager.rebuild_feature(
+        feature,
+        [
+            BM25ChunkRecord.from_chunk(chunk_id, document, metadata, tokenize(document))
+            for chunk_id, document, metadata in zip(ids, documents, metadatas, strict=True)
+        ],
+    )
 
 
 def test_retrieve_calls_openai_exactly_once_to_embed_the_query():
@@ -383,7 +415,7 @@ def test_retrieve_never_merges_chunks_missing_adjacency_metadata():
 def test_retrieve_hybrid_returns_empty_results_when_nothing_indexed():
     service, _, _ = _make_service()
 
-    result = service.retrieve_hybrid(query_text="How does Contact Log work?", feature="Contact Log")
+    result = service.retrieve_hybrid(query_text="How does Contact Log work?")
 
     assert result.retrieval_result.workflow_results == []
     assert result.diagnostics.vector_candidate_count == 0
@@ -395,8 +427,8 @@ def test_retrieve_hybrid_finds_a_relevant_chunk_via_vector_and_bm25_together():
     service, chroma_client, collection_name = _make_service(
         hybrid_candidate_chunks=20, reranked_final_chunks=5, reranker_min_score=0.05
     )
-    vector_store = VectorStoreService(client=chroma_client, collection_name=collection_name)
-    vector_store.replace_feature_chunks(
+    _seed_source_of_truth(
+        service,
         feature="Contact Log",
         ids=["workflow-chunk"],
         embeddings=[[2.0, 2.0]],
@@ -408,7 +440,7 @@ def test_retrieve_hybrid_finds_a_relevant_chunk_via_vector_and_bm25_together():
         ],
     )
 
-    result = service.retrieve_hybrid(query_text="How does Contact Log work?", feature="Contact Log")
+    result = service.retrieve_hybrid(query_text="How does Contact Log work?")
 
     assert [c.chunk_id for c in result.retrieval_result.workflow_results] == ["workflow-chunk"]
     [candidate] = result.diagnostics.candidates
@@ -423,8 +455,8 @@ def test_retrieve_hybrid_excludes_a_weakly_related_candidate_below_the_threshold
     service, chroma_client, collection_name = _make_service(
         hybrid_candidate_chunks=20, reranked_final_chunks=5, reranker_min_score=0.08
     )
-    vector_store = VectorStoreService(client=chroma_client, collection_name=collection_name)
-    vector_store.replace_feature_chunks(
+    _seed_source_of_truth(
+        service,
         feature="Contact Log",
         ids=["relevant", "boilerplate"],
         embeddings=[[2.0, 2.0], [2.0, 2.0]],
@@ -443,7 +475,7 @@ def test_retrieve_hybrid_excludes_a_weakly_related_candidate_below_the_threshold
     )
 
     result = service.retrieve_hybrid(
-        query_text="How do I delete and undo delete a Contact Log entry?", feature="Contact Log"
+        query_text="How do I delete and undo delete a Contact Log entry?"
     )
 
     assert [c.chunk_id for c in result.retrieval_result.workflow_results] == ["relevant"]
@@ -455,9 +487,9 @@ def test_retrieve_hybrid_deduplicates_near_identical_content_across_documents():
     service, chroma_client, collection_name = _make_service(
         hybrid_candidate_chunks=20, reranked_final_chunks=5, reranker_min_score=0.0
     )
-    vector_store = VectorStoreService(client=chroma_client, collection_name=collection_name)
     duplicate_text = "Bridged contacts are merged automatically when matching criteria align across records."
-    vector_store.replace_feature_chunks(
+    _seed_source_of_truth(
+        service,
         feature="Contact Log",
         ids=["contact-workflow", "sticket-workflow"],
         embeddings=[[2.0, 2.0], [2.1, 2.1]],
@@ -472,7 +504,7 @@ def test_retrieve_hybrid_deduplicates_near_identical_content_across_documents():
         ],
     )
 
-    result = service.retrieve_hybrid(query_text="How does Contact Log work?", feature="Contact Log")
+    result = service.retrieve_hybrid(query_text="How does Contact Log work?")
 
     assert len(result.retrieval_result.workflow_results) == 1
     assert result.diagnostics.duplicates_removed == 1
@@ -482,8 +514,8 @@ def test_retrieve_hybrid_respects_the_final_chunks_cap():
     service, chroma_client, collection_name = _make_service(
         hybrid_candidate_chunks=20, reranked_final_chunks=1, reranker_min_score=0.0
     )
-    vector_store = VectorStoreService(client=chroma_client, collection_name=collection_name)
-    vector_store.replace_feature_chunks(
+    _seed_source_of_truth(
+        service,
         feature="Contact Log",
         ids=["a", "b"],
         embeddings=[[2.0, 2.0], [2.0, 2.0]],
@@ -497,7 +529,7 @@ def test_retrieve_hybrid_respects_the_final_chunks_cap():
         ],
     )
 
-    result = service.retrieve_hybrid(query_text="How does Contact Log work?", feature="Contact Log")
+    result = service.retrieve_hybrid(query_text="How does Contact Log work?")
 
     assert len(result.retrieval_result.workflow_results) == 1
 
@@ -508,8 +540,8 @@ def test_retrieve_hybrid_still_merges_adjacent_chunks_from_the_same_document():
     service, chroma_client, collection_name = _make_service(
         hybrid_candidate_chunks=20, reranked_final_chunks=5, reranker_min_score=0.0
     )
-    vector_store = VectorStoreService(client=chroma_client, collection_name=collection_name)
-    vector_store.replace_feature_chunks(
+    _seed_source_of_truth(
+        service,
         feature="Contact Log",
         ids=["chunk-1", "chunk-2"],
         embeddings=[[2.0, 2.0], [2.0, 2.0]],
@@ -520,7 +552,7 @@ def test_retrieve_hybrid_still_merges_adjacent_chunks_from_the_same_document():
         ],
     )
 
-    result = service.retrieve_hybrid(query_text="How does Contact Log bridging work?", feature="Contact Log")
+    result = service.retrieve_hybrid(query_text="How does Contact Log bridging work?")
 
     assert len(result.retrieval_result.workflow.merged_chunks) == 1
     [merged] = result.retrieval_result.workflow.merged_chunks
@@ -529,8 +561,8 @@ def test_retrieve_hybrid_still_merges_adjacent_chunks_from_the_same_document():
 
 def test_retrieve_hybrid_preserves_source_categories():
     service, chroma_client, collection_name = _make_service(hybrid_candidate_chunks=20, reranker_min_score=0.0)
-    vector_store = VectorStoreService(client=chroma_client, collection_name=collection_name)
-    vector_store.replace_feature_chunks(
+    _seed_source_of_truth(
+        service,
         feature="Appointments",
         ids=["workflow-chunk", "test-case-chunk", "issue-chunk"],
         embeddings=[[2.0, 2.0], [2.0, 2.0], [2.0, 2.0]],
@@ -542,7 +574,7 @@ def test_retrieve_hybrid_preserves_source_categories():
         ],
     )
 
-    result = service.retrieve_hybrid(query_text="Appointments", feature="Appointments")
+    result = service.retrieve_hybrid(query_text="Appointments")
 
     assert [c.chunk_id for c in result.retrieval_result.workflow_results] == ["workflow-chunk"]
     assert [c.chunk_id for c in result.retrieval_result.test_case_results] == ["test-case-chunk"]
@@ -553,15 +585,15 @@ def test_retrieve_hybrid_only_calls_openai_once_to_embed_the_query():
     fake_client = FakeOpenAIClient(dimension=2)
     service, _, _ = _make_service(fake_client)
 
-    service.retrieve_hybrid(query_text="How does Contact Log work?", feature="Contact Log")
+    service.retrieve_hybrid(query_text="How does Contact Log work?")
 
     assert fake_client.calls == [["How does Contact Log work?"]]
 
 
 def test_retrieve_hybrid_measures_stage_latencies_separately():
     service, chroma_client, collection_name = _make_service(hybrid_candidate_chunks=20, reranker_min_score=0.0)
-    vector_store = VectorStoreService(client=chroma_client, collection_name=collection_name)
-    vector_store.replace_feature_chunks(
+    _seed_source_of_truth(
+        service,
         feature="Contact Log",
         ids=["a"],
         embeddings=[[2.0, 2.0]],
@@ -569,7 +601,7 @@ def test_retrieve_hybrid_measures_stage_latencies_separately():
         metadatas=[_source_of_truth_metadata(chunkId="a")],
     )
 
-    result = service.retrieve_hybrid(query_text="How does Contact Log work?", feature="Contact Log")
+    result = service.retrieve_hybrid(query_text="How does Contact Log work?")
 
     diagnostics = result.diagnostics
     assert diagnostics.vector_retrieval_ms >= 0
@@ -586,9 +618,9 @@ def test_retrieve_hybrid_measures_stage_latencies_separately():
 
 def test_retrieve_hybrid_reports_requested_available_and_returned_counts_per_source():
     service, chroma_client, collection_name = _make_service(hybrid_candidate_chunks=20, reranker_min_score=0.0)
-    vector_store = VectorStoreService(client=chroma_client, collection_name=collection_name)
     ids = [f"chunk-{i}" for i in range(5)]
-    vector_store.replace_feature_chunks(
+    _seed_source_of_truth(
+        service,
         feature="Contact Log",
         ids=ids,
         embeddings=[[2.0, 2.0]] * 5,
@@ -596,7 +628,7 @@ def test_retrieve_hybrid_reports_requested_available_and_returned_counts_per_sou
         metadatas=[_source_of_truth_metadata(chunkId=cid, feature="Contact Log") for cid in ids],
     )
 
-    result = service.retrieve_hybrid(query_text="How does Contact Log work?", feature="Contact Log")
+    result = service.retrieve_hybrid(query_text="How does Contact Log work?")
 
     by_artifact_type = {query.artifact_type: query for query in result.diagnostics.vector_queries}
     assert set(by_artifact_type) == {"WORKFLOW", "TEST_CASE", "ISSUE"}
@@ -624,10 +656,123 @@ def test_retrieve_hybrid_reports_vector_query_diagnostics_for_uploaded_documents
     )
 
     result = service.retrieve_hybrid(
-        query_text="How does Contact Log work?", feature="Contact Log", upload_session_id=session_id
+        query_text="How does Contact Log work?", upload_session_id=session_id
     )
 
     by_artifact_type = {query.artifact_type: query for query in result.diagnostics.vector_queries}
     assert "USER_UPLOAD" in by_artifact_type
     assert by_artifact_type["USER_UPLOAD"].available_chunks == 1
     assert by_artifact_type["USER_UPLOAD"].returned_chunks == 1
+
+
+# --- retrieve_hybrid: global retrieval — feature is provenance, never a filter ---
+
+
+def test_retrieve_hybrid_searches_across_every_feature_not_just_one():
+    service, chroma_client, collection_name = _make_service(hybrid_candidate_chunks=20, reranker_min_score=0.0)
+    _seed_source_of_truth(
+        service,
+        feature="Feature A",
+        ids=["chunk-a"],
+        embeddings=[[2.0, 2.0]],
+        documents=["Provider eligibility determines whether a provider can be assigned to a visit."],
+        metadatas=[_source_of_truth_metadata(chunkId="chunk-a", feature="Feature A", sourceFilename="Provider.md")],
+    )
+    _seed_source_of_truth(
+        service,
+        feature="Feature B",
+        ids=["chunk-b"],
+        embeddings=[[2.0, 2.0]],
+        documents=["Appointment eligibility determines whether a visit is billable."],
+        metadatas=[
+            _source_of_truth_metadata(chunkId="chunk-b", feature="Feature B", sourceFilename="Appointment.md")
+        ],
+    )
+
+    result = service.retrieve_hybrid(query_text="How does provider eligibility affect appointment eligibility?")
+
+    chunk_ids = {chunk.chunk_id for chunk in result.retrieval_result.workflow_results}
+    assert chunk_ids == {"chunk-a", "chunk-b"}
+    features = {chunk.feature for chunk in result.retrieval_result.workflow_results}
+    assert features == {"Feature A", "Feature B"}
+
+
+def test_retrieve_hybrid_does_not_exclude_a_chunk_merely_because_it_belongs_to_an_irrelevant_sounding_feature():
+    """An irrelevant *feature name* must never prevent retrieval of a
+    document that is otherwise the correct match for the question."""
+    service, chroma_client, collection_name = _make_service(hybrid_candidate_chunks=20, reranker_min_score=0.0)
+    _seed_source_of_truth(
+        service,
+        feature="Completely Unrelated Feature Name",
+        ids=["chunk-1"],
+        embeddings=[[2.0, 2.0]],
+        documents=["Bridged contacts are merged automatically when matching criteria align."],
+        metadatas=[_source_of_truth_metadata(chunkId="chunk-1", feature="Completely Unrelated Feature Name")],
+    )
+
+    result = service.retrieve_hybrid(query_text="How does Contact Log work?")
+
+    assert [chunk.chunk_id for chunk in result.retrieval_result.workflow_results] == ["chunk-1"]
+
+
+def test_retrieve_hybrid_bm25_leg_is_served_from_the_persistent_index_not_a_chroma_rebuild():
+    """K/F: the BM25 candidates come from the loaded `BM25IndexManager`;
+    the whole ChromaDB collection is never read to (re)build BM25."""
+    service, _, _ = _make_service(hybrid_candidate_chunks=20, reranker_min_score=0.0)
+    _seed_source_of_truth(
+        service,
+        feature="Contact Log",
+        ids=["c1"],
+        embeddings=[[2.0, 2.0]],
+        documents=["Delete and undo delete both apply directly to a Contact Log entry."],
+        metadatas=[_source_of_truth_metadata(chunkId="c1", feature="Contact Log")],
+    )
+
+    calls: list = []
+    original = service._vector_store.get_chunks_for_filter
+    service._vector_store.get_chunks_for_filter = lambda *a, **k: (calls.append((a, k)), original(*a, **k))[1]
+
+    result = service.retrieve_hybrid(query_text="How do I delete and undo delete a Contact Log entry?")
+
+    assert result.diagnostics.bm25_candidate_count >= 1
+    assert [c.chunk_id for c in result.retrieval_result.workflow_results] == ["c1"]
+    # BM25 never asked the vector store for the corpus
+    assert calls == []
+
+
+def test_retrieve_hybrid_still_fuses_vector_and_bm25_when_bm25_index_is_missing():
+    """Graceful degradation: no persistent BM25 index yet -> BM25 leg is
+    empty, vector leg still works, RRF still runs."""
+    service, _, _ = _make_service(hybrid_candidate_chunks=20, reranker_min_score=0.0)
+    # seed ChromaDB only; leave the BM25 manager unbuilt
+    VectorStoreService(
+        client=service._chroma_client, collection_name=service._vector_store.collection_name
+    ).replace_feature_chunks(
+        feature="Contact Log",
+        ids=["c1"],
+        embeddings=[[2.0, 2.0]],
+        documents=["Bridged contacts are merged automatically when matching criteria align."],
+        metadatas=[_source_of_truth_metadata(chunkId="c1", feature="Contact Log")],
+    )
+
+    result = service.retrieve_hybrid(query_text="How does Contact Log work?")
+
+    assert result.diagnostics.bm25_candidate_count == 0
+    assert [c.chunk_id for c in result.retrieval_result.workflow_results] == ["c1"]
+
+
+def test_retrieve_hybrid_feature_metadata_still_available_though_not_filtered_on():
+    service, chroma_client, collection_name = _make_service(hybrid_candidate_chunks=20, reranker_min_score=0.0)
+    _seed_source_of_truth(
+        service,
+        feature="Contact Log",
+        ids=["chunk-1"],
+        embeddings=[[2.0, 2.0]],
+        documents=["Contact Log workflow details."],
+        metadatas=[_source_of_truth_metadata(chunkId="chunk-1", feature="Contact Log")],
+    )
+
+    result = service.retrieve_hybrid(query_text="How does Contact Log work?")
+
+    [chunk] = result.retrieval_result.workflow_results
+    assert chunk.feature == "Contact Log"

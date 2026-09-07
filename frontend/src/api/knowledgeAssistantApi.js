@@ -10,13 +10,14 @@ import { ENDPOINTS } from "./endpoints.js";
 export const knowledgeAssistantApi = {
   /**
    * Asks a question. The backend is the sole authority for
-   * `generationId` — this never sends one, only receives one back.
-   * @param {{question: string, feature: string, uploadSessionId?: string, topK?: number}} options
+   * `generationId` — this never sends one, only receives one back. No
+   * `feature` either: the Knowledge Assistant searches the entire
+   * Source of Truth corpus for every question.
+   * @param {{question: string, uploadSessionId?: string, topK?: number}} options
    */
-  ask({ question, feature, uploadSessionId, topK } = {}) {
+  ask({ question, uploadSessionId, topK } = {}) {
     return apiClient.post(ENDPOINTS.knowledgeAssistantAsk, {
       userQuestion: question,
-      feature,
       uploadSessionId: uploadSessionId || undefined,
       topK: topK || undefined,
     });

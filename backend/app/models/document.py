@@ -27,3 +27,17 @@ class Document(BaseModel):
     """
     storage_path: str
     uploaded_at: datetime
+    source_relative_path: str | None = None
+    """Portable path from Source of Truth, e.g.
+    "source_of_truth/Service Model 1/workflows/example.pdf" — always
+    forward-slashed, never a machine-specific absolute path. Set only by
+    `SourceOfTruthIndexer._build_document` (from the actual discovered
+    path); `None` for a `UploadService`-ingested document, which has no
+    Source of Truth path at all.
+    """
+    source_folder: str | None = None
+    """The folder directly under source_of_truth/ this document lives
+    in — for the current folder layout, always equal to `feature`, but
+    computed independently (not copied from it) so this stays correct
+    if that ever changes. `None` for a `UploadService`-ingested document.
+    """

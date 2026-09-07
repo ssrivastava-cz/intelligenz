@@ -13,14 +13,14 @@ class KnowledgeAssistantAskRequest(CamelModel):
     """Request for `POST /knowledge-assistant/ask`. No `generationId`
     here — the backend is the sole authority for it now (generated at
     the start of `KnowledgeAssistantService.ask`), returned in the
-    response instead. `feature` is required because `RetrievalService`
-    (reused unchanged) has no cross-feature search mode — every
-    retrieval is scoped to one feature, exactly like the Test Plan
-    Generator's.
+    response instead. No `feature` either: the Knowledge Assistant
+    searches the entire Source of Truth corpus for every question (see
+    `RetrievalService.retrieve_hybrid`), unlike the Test Plan
+    Generator's `GenerateRequest`, which is a separate schema and still
+    requires one.
     """
 
     user_question: str
-    feature: str
     upload_session_id: str | None = None
     top_k: int | None = None
 
@@ -114,12 +114,17 @@ class KnowledgeAssistantDebugChunkOut(CamelModel):
     — every field `/retrieval/debug` already exposes live, just read
     back from what was actually persisted for this generation. Never
     the embedding vector.
+
+    `feature` is provenance only, per `RetrievedChunkRef` — retrieval no
+    longer restricts by it, so two chunks in the same response can
+    legitimately show different features here.
     """
 
     chunk_id: str
     document_id: str
     document_name: str
     artifact_type: str | None
+    feature: str | None
     section_heading: str | None
     page_number: int | None
     similarity_score: float

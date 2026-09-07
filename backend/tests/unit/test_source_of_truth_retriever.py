@@ -142,3 +142,48 @@ def test_retrieve_respects_top_k():
 
     assert len(results) == 1
     assert results[0].chunk_id == "a"
+
+
+def test_retrieve_with_no_feature_bound_searches_across_every_feature():
+    vector_store = _make_vector_store()
+    vector_store.replace_feature_chunks(
+        feature="Appointments",
+        ids=["a"],
+        embeddings=[[1.0, 0.0]],
+        documents=["Appointments text."],
+        metadatas=[_metadata(chunkId="a", feature="Appointments")],
+    )
+    vector_store.replace_feature_chunks(
+        feature="Coding Tool",
+        ids=["b"],
+        embeddings=[[1.0, 0.0]],
+        documents=["Coding Tool text."],
+        metadatas=[_metadata(chunkId="b", feature="Coding Tool")],
+    )
+    retriever = SourceOfTruthRetriever(vector_store)
+
+    results = retriever.retrieve([1.0, 0.0], top_k=5)
+
+    assert {chunk.chunk_id for chunk in results} == {"a", "b"}
+    assert {chunk.feature for chunk in results} == {"Appointments", "Coding Tool"}
+
+
+def test_count_available_with_no_feature_bound_counts_across_every_feature():
+    vector_store = _make_vector_store()
+    vector_store.replace_feature_chunks(
+        feature="Appointments",
+        ids=["a"],
+        embeddings=[[1.0, 0.0]],
+        documents=["Appointments text."],
+        metadatas=[_metadata(chunkId="a", feature="Appointments")],
+    )
+    vector_store.replace_feature_chunks(
+        feature="Coding Tool",
+        ids=["b"],
+        embeddings=[[1.0, 0.0]],
+        documents=["Coding Tool text."],
+        metadatas=[_metadata(chunkId="b", feature="Coding Tool")],
+    )
+    retriever = SourceOfTruthRetriever(vector_store)
+
+    assert retriever.count_available() == 2

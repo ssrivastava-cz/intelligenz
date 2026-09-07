@@ -60,6 +60,14 @@ class RetrievedChunkRef(BaseModel):
     `/retrieval/debug` endpoint already does, just persisted) — added
     later for the Knowledge Assistant debug endpoint, so any existing
     caller that only supplies the original four fields is unaffected.
+
+    `feature` is provenance, not a retrieval restriction: since the
+    Knowledge Assistant now searches the entire Source of Truth corpus
+    (see `RetrievalService.retrieve_hybrid`), one generation's retrieved
+    chunks can legitimately come from several different features, and
+    this is how each one's origin stays identifiable. `None` for a
+    record persisted before this field existed, or for a chunk whose
+    feature genuinely isn't known.
     """
 
     chunk_id: str
@@ -67,6 +75,7 @@ class RetrievedChunkRef(BaseModel):
     document_name: str
     similarity_score: float
     artifact_type: str | None = None
+    feature: str | None = None
     section_heading: str | None = None
     page_number: int | None = None
     chunk_number: int | None = None

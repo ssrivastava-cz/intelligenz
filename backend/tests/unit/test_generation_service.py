@@ -14,6 +14,8 @@ from chromadb.config import Settings as ChromaSettings
 
 from app.core.exceptions import ExternalServiceError, ValidationError
 from app.models.generated_test_case import GeneratedTestCasesResponse
+from app.retrievers.text_tokenizer import TOKENIZER_VERSION, tokenize
+from app.services.bm25_index_manager import BM25IndexManager
 from app.services.cost_calculator import CostCalculator
 from app.services.embedding_service import EmbeddingService
 from app.services.generation_service import GenerationService
@@ -58,10 +60,18 @@ def _make_service(tmp_path, fake_client: FakeOpenAIClient | None = None, max_gen
     collection_name = f"test_collection_{uuid.uuid4().hex[:8]}"
     vector_store = VectorStoreService(client=chroma_client, collection_name=collection_name)
 
+    _bm25_manager = BM25IndexManager(
+        index_dir=tmp_path / "bm25",
+        collection_name=collection_name,
+        tokenizer=tokenize,
+        tokenizer_version=TOKENIZER_VERSION,
+        chunking_signature="chunk_size=500,chunk_overlap=50",
+    )
     retrieval_service = RetrievalService(
         embedding_service=embedding_service,
         vector_store=vector_store,
         chroma_client=chroma_client,
+        bm25_index_manager=_bm25_manager,
         upload_collection_prefix="uploaded_documents",
         default_top_k=5,
     )

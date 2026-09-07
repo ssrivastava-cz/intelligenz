@@ -78,16 +78,16 @@ class KnowledgeAssistantService:
     def ask(
         self,
         user_question: str,
-        feature: str,
         upload_session_id: str | None = None,
         top_k: int | None = None,
     ) -> tuple[str, KnowledgeAssistantAnswer]:
         """Generates this request's `generation_id` (the caller no
         longer supplies one — this is the sole authority), then
-        retrieves context for `user_question` (scoped to `feature`,
-        exactly like the Test Plan Generator's retrieval —
-        `RetrievalService` has no cross-feature search mode, and this
-        reuses it unchanged), builds the Knowledge Assistant prompt,
+        retrieves context for `user_question` across the *entire*
+        Source of Truth corpus (`RetrievalService.retrieve_hybrid` with
+        no `feature` — unlike the Test Plan Generator's `retrieve()`,
+        which stays feature-scoped and unaffected by this), builds the
+        Knowledge Assistant prompt,
         persists `user_question.json`/`retrieved_chunks.json`/
         `prompt.json`, then sends that exact prompt to OpenAI Chat
         exactly once. Raises `ExternalServiceError` if the OpenAI call
@@ -117,7 +117,6 @@ class KnowledgeAssistantService:
             stage = KnowledgeAssistantErrorStage.RETRIEVAL
             hybrid_result = self._retrieval_service.retrieve_hybrid(
                 query_text=user_question,
-                feature=feature,
                 upload_session_id=upload_session_id,
                 hybrid_candidate_chunks=top_k,
             )
@@ -381,6 +380,12 @@ def _chunk_ref(chunk: RetrievedChunk) -> RetrievedChunkRef:
     same "was this chunk the result of merging adjacent originals"
     information persisted here matches what `/retrieval/debug` already
     reports live — no separate mapping logic invented.
+
+    `feature` is carried through as provenance: retrieval is no longer
+    scoped by feature (see `RetrievalService.retrieve_hybrid`), so a
+    generation's retrieved chunks can legitimately span several
+    features — this is how a later reader (the debug endpoint, a human
+    auditing an answer) can still tell which feature each one came from.
     """
     merged_chunk_numbers = chunk.merged_chunk_numbers
     is_merged = merged_chunk_numbers is not None
@@ -390,6 +395,7 @@ def _chunk_ref(chunk: RetrievedChunk) -> RetrievedChunkRef:
         document_name=chunk.source_filename,
         similarity_score=chunk.similarity_score,
         artifact_type=chunk.artifact_type,
+        feature=chunk.feature,
         section_heading=chunk.section_heading,
         page_number=chunk.page_number,
         chunk_number=chunk.chunk_number,

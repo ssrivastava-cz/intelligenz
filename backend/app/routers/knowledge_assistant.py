@@ -1,7 +1,9 @@
 """Knowledge Assistant: ask + feedback + debug.
 
 `POST /knowledge-assistant/ask` runs the full pipeline — generate a
-`generationId`, retrieve context, build the prompt, persist
+`generationId`, retrieve context from the entire Source of Truth corpus
+(no `feature` in the request; see `RetrievalService.retrieve_hybrid`),
+build the prompt, persist
 `user_question.json`/`retrieved_chunks.json`/`prompt.json`, call OpenAI
 Chat exactly once, validate the response, persist `response.json`/
 `usage.json` — via `KnowledgeAssistantService`, and returns the answer
@@ -89,7 +91,6 @@ async def ask_knowledge_assistant(
     """
     generation_id, answer = knowledge_assistant_service.ask(
         user_question=payload.user_question,
-        feature=payload.feature,
         upload_session_id=payload.upload_session_id,
         top_k=payload.top_k,
     )
@@ -328,6 +329,7 @@ def _chunk_out(chunk: RetrievedChunkRef) -> KnowledgeAssistantDebugChunkOut:
         document_id=chunk.document_id,
         document_name=chunk.document_name,
         artifact_type=chunk.artifact_type,
+        feature=chunk.feature,
         section_heading=chunk.section_heading,
         page_number=chunk.page_number,
         similarity_score=chunk.similarity_score,

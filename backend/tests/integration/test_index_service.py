@@ -98,6 +98,94 @@ async def test_index_feature_endpoint_404_for_unknown_feature(client, tmp_path):
         _clear_index_dependency_overrides()
 
 
+async def test_index_source_of_truth_endpoint_indexes_every_feature(client, tmp_path):
+    _write_workflow_document(tmp_path, "Appointments")
+    _write_workflow_document(tmp_path, "CodingTool")
+    _override_index_dependencies(tmp_path)
+
+    try:
+        response = await client.post("/api/v1/index-source-of-truth")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["totalFeatures"] == 2
+        assert body["successfulFeatures"] == 2
+        assert body["failedFeatures"] == 0
+        assert body["totalDocumentsIndexed"] == 2
+        assert body["totalChunksIndexed"] >= 2
+        assert body["totalEmbeddingTokens"] > 0
+        assert [f["feature"] for f in body["features"]] == ["Appointments", "CodingTool"]
+        assert all(f["status"] == "SUCCESS" and f["error"] is None for f in body["features"])
+
+        history = (await client.get("/api/v1/index-history")).json()
+        assert {h["feature"] for h in history} == {"Appointments", "CodingTool"}
+    finally:
+        _clear_index_dependency_overrides()
+
+
+async def test_index_source_of_truth_endpoint_reports_a_failed_feature_and_continues(client, tmp_path):
+    _write_workflow_document(tmp_path, "Appointments")
+    broken = tmp_path / "source_of_truth" / "Broken" / "workflows"
+    broken.mkdir(parents=True)
+    (broken / "bad.pdf").write_text("this is not a real pdf", encoding="utf-8")
+    _override_index_dependencies(tmp_path)
+
+    try:
+        response = await client.post("/api/v1/index-source-of-truth")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["totalFeatures"] == 2
+        assert body["successfulFeatures"] == 1
+        assert body["failedFeatures"] == 1
+        by_feature = {f["feature"]: f for f in body["features"]}
+        assert by_feature["Broken"]["status"] == "FAILED"
+        assert by_feature["Broken"]["error"]
+        assert by_feature["Broken"]["chunksIndexed"] == 0
+        assert by_feature["Appointments"]["status"] == "SUCCESS"
+
+        # only the successful feature reached the indexing history
+        history = (await client.get("/api/v1/index-history")).json()
+        assert [h["feature"] for h in history] == ["Appointments"]
+    finally:
+        _clear_index_dependency_overrides()
+
+
+async def test_index_source_of_truth_endpoint_returns_an_empty_summary_when_no_features(client, tmp_path):
+    (tmp_path / "source_of_truth").mkdir()
+    _override_index_dependencies(tmp_path)
+
+    try:
+        response = await client.post("/api/v1/index-source-of-truth")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["totalFeatures"] == 0
+        assert body["successfulFeatures"] == 0
+        assert body["failedFeatures"] == 0
+        assert body["features"] == []
+        assert (await client.get("/api/v1/index-history")).json() == []
+    finally:
+        _clear_index_dependency_overrides()
+
+
+async def test_index_feature_endpoint_is_unchanged_by_the_new_batch_endpoint(client, tmp_path):
+    """Regression: POST /index-feature/{feature} still behaves exactly as before."""
+    _write_workflow_document(tmp_path, "Appointments")
+    _override_index_dependencies(tmp_path)
+
+    try:
+        response = await client.post("/api/v1/index-feature/Appointments")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["feature"] == "Appointments"
+        assert body["documentsIndexed"] == 1
+        assert body["chunksIndexed"] == 1
+    finally:
+        _clear_index_dependency_overrides()
+
+
 async def test_index_history_endpoint_returns_empty_list_when_nothing_indexed(client, tmp_path):
     _override_index_dependencies(tmp_path)
 

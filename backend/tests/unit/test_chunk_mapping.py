@@ -57,3 +57,30 @@ def test_to_retrieved_chunk_derives_similarity_score_from_the_same_distance():
 
     assert chunk.vector_distance == 1.0
     assert chunk.similarity_score == 0.5  # 1 / (1 + 1)
+
+
+def test_to_retrieved_chunk_maps_source_attribution_when_present():
+    match = _match(
+        documentTitle="Contact Log Workflow Guide",
+        sourcePath="source_of_truth/Contact and Sticket Log/workflows/onboarding.md",
+        sourceFolder="Contact and Sticket Log",
+    )
+
+    chunk = to_retrieved_chunk(match, collection_name="source_of_truth_chunks")
+
+    assert chunk.document_title == "Contact Log Workflow Guide"
+    assert chunk.source_path == "source_of_truth/Contact and Sticket Log/workflows/onboarding.md"
+    assert chunk.source_folder == "Contact and Sticket Log"
+
+
+def test_to_retrieved_chunk_leaves_source_attribution_none_when_absent():
+    """A chunk indexed before this metadata existed, or one from an
+    uploaded document (no Source of Truth path at all) — must not raise
+    a KeyError, and must not fabricate a value."""
+    match = _match()
+
+    chunk = to_retrieved_chunk(match, collection_name="source_of_truth_chunks")
+
+    assert chunk.document_title is None
+    assert chunk.source_path is None
+    assert chunk.source_folder is None
