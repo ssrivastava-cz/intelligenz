@@ -3,7 +3,14 @@
  * This is the ONLY module allowed to make network requests — the
  * frontend must never call OpenAI or MongoDB directly.
  */
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
+// Origin of the FastAPI backend — e.g. `http://localhost:8000` in local dev,
+// or the deployed backend URL in production (set `VITE_API_URL` in the Netlify
+// site environment variables). `VITE_*` vars are inlined into the built bundle
+// at build time and are therefore PUBLIC — never put a secret in one.
+// All backend routes live under the `/api/v1` prefix, which the frontend
+// appends here rather than baking into the env value.
+const API_ORIGIN = (import.meta.env.VITE_API_URL ?? "http://localhost:8000").replace(/\/+$/, "");
+const API_BASE_URL = `${API_ORIGIN}/api/v1`;
 const REQUEST_TIMEOUT_MS = 30000;
 // AI Test Case Generation takes significantly longer than an ordinary
 // API call (a real OpenAI Chat completion), so it alone opts into this

@@ -1,0 +1,9 @@
+# Local environment files — may contain real values; never commit them.
+# The repo-root .gitignore already covers these, this is belt-and-braces so
+# the frontend package is self-contained. Only `.env.example` is tracked.
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+!.env.example
