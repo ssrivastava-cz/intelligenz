@@ -17,32 +17,3 @@
   font-weight: 600;
   color: var(--text-primary);
 }
-
-.top-navbar__right {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-}
-
-.top-navbar__env-badge {
-  padding: 4px 10px;
-  border-radius: var(--radius-full);
-  background: var(--success-muted);
-  color: var(--success);
-  font-size: 0.72rem;
-  font-weight: 600;
-}
-
-.top-navbar__avatar {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-full);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-color);
-  color: var(--text-secondary);
-  font-size: 0.72rem;
-  font-weight: 700;
-}
